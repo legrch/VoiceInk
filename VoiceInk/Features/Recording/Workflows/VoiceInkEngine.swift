@@ -99,6 +99,9 @@ class VoiceInkEngine: NSObject, ObservableObject {
         }
     }
     @Published var shouldCancelRecording = false
+    private var pipelineWorkDepth = 0
+    private var resourceCleanupDepth = 0
+    private var isRecordingStartBlocked: Bool { pipelineWorkDepth > 0 || resourceCleanupDepth > 0 }
     @Published var partialTranscript: String = ""
     var currentSession: TranscriptionSession?
     private var currentSessionTranscriptionConfiguration: TranscriptionRuntimeConfiguration?
@@ -181,12 +184,17 @@ class VoiceInkEngine: NSObject, ObservableObject {
     // MARK: - Toggle Record
 
     func toggleRecord(modeId: UUID? = nil, isAssistantFollowUp: Bool = false, sendAfterPaste: Bool = false) async {
+        guard !isRecordingStartBlocked, recordingState != .busy else { return }
+
         if recordingState == .starting {
             await cancelRecording()
             return
         }
 
         if recordingState == .recording {
+            // Include stopping and cancellation before the pipeline has an identity.
+            pipelineWorkDepth += 1
+            defer { pipelineWorkDepth -= 1 }
             // Stopping the hardware suspends. Keep all inputs tied to this recording
             // before cancellation or a new recording can replace the shared state.
             let audioURL = recordedFile
@@ -267,6 +275,7 @@ class VoiceInkEngine: NSObject, ObservableObject {
                         guard self.activeRecordingStartID == startID, !self.shouldCancelRecording else { return }
                         guard await self.passesRecordingPreflight(),
                             self.activeRecordingStartID == startID,
+                            !self.isRecordingStartBlocked,
                             !self.shouldCancelRecording
                         else {
                             return
@@ -725,6 +734,8 @@ class VoiceInkEngine: NSObject, ObservableObject {
     // MARK: - Cancellation
 
     func cancelRecording() async {
+        guard resourceCleanupDepth == 0 else { return }
+        if pipelineWorkDepth > 0 && (recordingState == .idle || recordingState == .busy) { return }
         let shouldFinishSessionImmediately: Bool
         switch recordingState {
         case .starting, .recording:
@@ -749,6 +760,8 @@ class VoiceInkEngine: NSObject, ObservableObject {
     }
 
     func resetRecordingSession() async {
+        resourceCleanupDepth += 1
+        defer { resourceCleanupDepth -= 1 }
         cancelCurrentSession()
         activeRecordingStartID = nil
         activePipelineTranscriptionID = nil
@@ -778,6 +791,8 @@ class VoiceInkEngine: NSObject, ObservableObject {
     }
 
     private func finishActiveRecorderCancellation() async {
+        resourceCleanupDepth += 1
+        defer { resourceCleanupDepth -= 1 }
         activeRecordingStartID = nil
         clearActiveRecordingContext()
         await recorder.stopRecording()
@@ -924,6 +939,8 @@ class VoiceInkEngine: NSObject, ObservableObject {
     }
 
     private func finishRecorderSession() async {
+        resourceCleanupDepth += 1
+        defer { resourceCleanupDepth -= 1 }
         let preparationTask = voiceInkRefinePreparationTask
         voiceInkRefinePreparationTask = nil
         preparationTask?.cancel()
@@ -937,6 +954,8 @@ class VoiceInkEngine: NSObject, ObservableObject {
     }
 
     func cleanupResources() async {
+        resourceCleanupDepth += 1
+        defer { resourceCleanupDepth -= 1 }
         logger.notice("cleanupResources: releasing model resources")
         activeRecordingStartID = nil
         activeRecordingUseCase = .newSession

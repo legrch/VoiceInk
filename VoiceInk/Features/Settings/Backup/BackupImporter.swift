@@ -4,21 +4,27 @@ import SwiftData
 enum BackupImporter {
     private static let keyIsTextFormattingEnabled = "IsTextFormattingEnabled"
 
+    struct Result {
+        var rejectedAudioSettings: [String] = []
+        var audioSettingsPending = false
+    }
+
     @MainActor
     static func apply(
         _ backup: BackupFile, categories: Set<BackupCategory>, enhancementService: AIEnhancementService,
         recordingShortcutManager: RecordingShortcutManager, menuBarManager: MenuBarManager,
         mediaController: MediaController, playbackController: PlaybackController, recorderUIManager: RecorderUIManager,
         modelContext: ModelContext, transcriptionModelManager: TranscriptionModelManager
-    ) async throws {
+    ) async throws -> Result {
         var shouldRepairModePromptSelections = false
+        var result = Result()
 
         if categories.contains(.dictionary) {
             try await importDictionary(from: backup, modelContext: modelContext)
         }
 
         if categories.contains(.general) {
-            importGeneral(
+            result.rejectedAudioSettings = importGeneral(
                 backup.generalSettings,
                 recordingShortcutManager: recordingShortcutManager,
                 menuBarManager: menuBarManager,
@@ -26,6 +32,7 @@ enum BackupImporter {
                 playbackController: playbackController,
                 recorderUIManager: recorderUIManager
             )
+            result.audioSettingsPending = mediaController.duckingConfigurationPending
         }
 
         if categories.contains(.prompts) {
@@ -75,17 +82,19 @@ enum BackupImporter {
         if categories.contains(.customModels) {
             importCustomModels(backup.customCloudModels, transcriptionModelManager: transcriptionModelManager)
         }
+        return result
     }
 
     @MainActor
     private static func importGeneral(
         _ general: GeneralBackup?, recordingShortcutManager: RecordingShortcutManager, menuBarManager: MenuBarManager,
         mediaController: MediaController, playbackController: PlaybackController, recorderUIManager: RecorderUIManager
-    ) {
+    ) -> [String] {
         guard let general else {
             print("No general settings found in the imported file.")
-            return
+            return []
         }
+        var rejectedAudioSettings: [String] = []
 
         if let shortcut = general.primaryRecordingShortcut {
             ShortcutStore.setShortcut(shortcut.shortcut, for: .primaryRecording)
@@ -168,14 +177,27 @@ enum BackupImporter {
             UserDefaults.standard.set(audioRetention, forKey: CleanupSettingsKeys.audioRetentionPeriod)
         }
 
-        if let muteSystem = general.isSystemMuteEnabled {
-            mediaController.isSystemMuteEnabled = muteSystem
+        let audioDecision = AudioDuckingBackupPolicy.decide(
+            payload: general.audioDucking, legacyMute: general.isSystemMuteEnabled,
+            current: mediaController.duckingSettings.configuration
+        )
+        switch audioDecision {
+        case .preserve:
+            break
+        case .apply(let value):
+            if !mediaController.duckingSettings.set(value) { rejectedAudioSettings.append("Audio ducking") }
+        case .reject:
+            rejectedAudioSettings.append("Audio ducking")
         }
         if let pauseMedia = general.isPauseMediaEnabled {
             playbackController.isPauseMediaEnabled = pauseMedia
         }
         if let audioDelay = general.audioResumptionDelay {
-            mediaController.audioResumptionDelay = audioDelay
+            if AudioDelay.nanoseconds(audioDelay) != nil {
+                mediaController.audioResumptionDelay = audioDelay
+            } else {
+                rejectedAudioSettings.append("Media resume delay")
+            }
         }
         if let experimentalEnabled = general.isExperimentalFeaturesEnabled {
             UserDefaults.standard.set(experimentalEnabled, forKey: "isExperimentalFeaturesEnabled")
@@ -223,6 +245,7 @@ enum BackupImporter {
         }
 
         print("Successfully imported general settings.")
+        return rejectedAudioSettings
     }
 
     @MainActor

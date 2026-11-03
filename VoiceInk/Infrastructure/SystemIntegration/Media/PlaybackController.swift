@@ -149,9 +149,10 @@ class PlaybackController: ObservableObject {
         }
 
         guard canRestore(pause, sessionID: sessionID) else { return }
-        if delay > 0 {
+        let delayNanoseconds = AudioDelay.restorationNanoseconds(delay)
+        if delayNanoseconds > 0 {
             do {
-                try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                try await Task.sleep(nanoseconds: delayNanoseconds)
             } catch {
                 return
             }

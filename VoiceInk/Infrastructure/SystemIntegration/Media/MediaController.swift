@@ -5,6 +5,28 @@ import Foundation
 final class MediaController: ObservableObject {
 
     static let shared = MediaController()
+    let duckingSettings = AudioDuckingSettings()
+    @Published private(set) var duckingStatus: AudioDuckingRuntime.Status = .idle
+    @Published private(set) var incompleteDuckingRestoration = false
+    @Published private(set) var duckingQuarantined = false
+    @Published private(set) var canAcknowledgeDuckingRecovery = false
+    @Published private(set) var audioOutputUID: String?
+    @Published private(set) var audioOutputName: String?
+    private var duckingService: AudioDuckingService?
+    private var duckingToken: AudioDuckingLease.Token?
+    private var effectiveMode: AudioDuckingConfiguration.Mode = .unchanged
+
+    var duckingConfigurationPending: Bool {
+        if let effective = duckingService?.effectiveConfiguration, duckingService?.hasOwnershipCycle == true {
+            var desired = duckingSettings.configuration
+            // Retained level is applied live; other fields take effect after
+            // the current ownership cycle is finished.
+            desired.retainedPercent = effective.retainedPercent
+            desired.retainedPercentByDevice = effective.retainedPercentByDevice
+            return effective != desired
+        }
+        return !mutedDevices.isEmpty && duckingSettings.configuration.mode != .mute
+    }
 
     // Keep responsibility across rapid recordings, including output-device changes.
     private var mutedDevices: Set<AudioDeviceID> = []
@@ -18,15 +40,80 @@ final class MediaController: ObservableObject {
         didSet { UserDefaults.standard.set(audioResumptionDelay, forKey: "audioResumptionDelay") }
     }
 
-    private init() {}
+    private init() { ensureDuckingService() }
+
+    private func ensureDuckingService() {
+        guard duckingService == nil else { return }
+        duckingService = AudioDuckingService { [weak self] status in
+            Task { @MainActor in
+                self?.duckingStatus = status
+                self?.duckingQuarantined = self?.duckingService?.isQuarantined == true
+                self?.canAcknowledgeDuckingRecovery = self?.duckingService?.canAcknowledgeRecovery == true
+                let identity = self?.duckingService?.currentOutputIdentity
+                self?.audioOutputUID = identity?.uid
+                self?.audioOutputName = identity?.name
+                if status == .incomplete { self?.incompleteDuckingRestoration = true }
+            }
+        }
+    }
+
+    func updateDuckingLevel(_ percent: Double) {
+        duckingService?.updateRetainedPercent(percent)
+    }
 
     func beginRecordingSession(sessionID: UUID) {
         // Invalidate delayed restoration before the recorder's 220 ms mute delay.
         recordingSessionID = sessionID
+        let desired = duckingSettings.configuration
+        if duckingService?.isQuarantined == true {
+            // An outstanding HAL effect cannot be cancelled. Do not start a
+            // competing mute or another duck cycle until the service is reset.
+            effectiveMode = .unchanged
+        } else if duckingService?.hasOwnershipCycle == true {
+            effectiveMode = .duck
+        } else if !mutedDevices.isEmpty {
+            effectiveMode = .mute
+        } else {
+            effectiveMode = desired.mode
+        }
+        if effectiveMode == .duck {
+            ensureDuckingService()
+            duckingToken = duckingService?.begin(sessionID: sessionID, desired: desired)
+            // Cleanup can finish between choosing the inherited cycle and the
+            // serialized begin. In that case honor the newly effective mode.
+            if let effective = duckingService?.effectiveConfiguration, effective.mode != .duck,
+               duckingService?.hasOwnershipCycle == false {
+                duckingService?.abandonUnownedSession()
+                duckingToken = nil
+                effectiveMode = effective.mode
+            } else if duckingToken == nil, duckingService?.hasOwnershipCycle == false, desired.mode != .duck {
+                effectiveMode = desired.mode
+            }
+        } else {
+            duckingService?.abandonUnownedSession()
+            duckingToken = nil
+        }
+    }
+
+    func acknowledgeDuckingRecovery() {
+        if duckingService?.acknowledgeRecovery() == true {
+            canAcknowledgeDuckingRecovery = false
+            incompleteDuckingRestoration = false
+        }
+    }
+
+    func dismissIncompleteDuckingRestoration() {
+        incompleteDuckingRestoration = false
     }
 
     func muteSystemAudio(sessionID: UUID) -> Bool {
-        guard sessionID == recordingSessionID, !Task.isCancelled, isSystemMuteEnabled else { return false }
+        guard sessionID == recordingSessionID, !Task.isCancelled else { return false }
+        if effectiveMode == .duck {
+            guard let duckingToken else { return false }
+            duckingService?.activate(token: duckingToken)
+            return true
+        }
+        guard effectiveMode == .mute else { return false }
         guard let deviceID = getDefaultOutputDevice(),
             let currentlyMuted = isSystemAudioMuted(deviceID: deviceID) else {
             return false
@@ -36,16 +123,24 @@ final class MediaController: ObservableObject {
         guard setSystemMuted(true, deviceID: deviceID) else {
             return false
         }
+        objectWillChange.send()
         mutedDevices.insert(deviceID)
         return true
     }
 
     func unmuteSystemAudio(sessionID: UUID) async {
-        guard sessionID == recordingSessionID, !Task.isCancelled, !mutedDevices.isEmpty else { return }
+        guard sessionID == recordingSessionID, !Task.isCancelled else { return }
+        if effectiveMode == .duck {
+            guard let duckingToken else { return }
+            duckingService?.end(token: duckingToken)
+            return
+        }
+        guard effectiveMode == .mute, !mutedDevices.isEmpty else { return }
         let delay = audioResumptionDelay
-        if delay > 0 {
+        let delayNanoseconds = AudioDelay.restorationNanoseconds(delay)
+        if delayNanoseconds > 0 {
             do {
-                try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                try await Task.sleep(nanoseconds: delayNanoseconds)
             } catch {
                 return
             }
@@ -56,6 +151,7 @@ final class MediaController: ObservableObject {
         // Restore ownership even if the preference was disabled during recording.
         for deviceID in Array(mutedDevices) {
             if setSystemMuted(false, deviceID: deviceID) {
+                objectWillChange.send()
                 mutedDevices.remove(deviceID)
             }
         }
