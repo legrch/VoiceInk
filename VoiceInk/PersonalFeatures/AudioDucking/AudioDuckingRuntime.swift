@@ -85,6 +85,27 @@ final class AudioDuckingRuntime {
     }
     private var pendingWrite: PendingWrite?
     private var pendingRetainedPercent: Double?
+    private(set) var manualAdjustment: (id: UUID, uid: String, percent: Double)?
+
+    private func adoptUserLevel(_ current: AudioDuckingOutputSnapshot, token: AudioDuckingLease.Token) -> Bool {
+        guard pendingWrite == nil, !unresolvedWrite, !lease.ended, !lease.restoring,
+              let baseline = lease.baseline, let peak = baseline.max(), peak > 0,
+              let level = current.values.max(), var config = effectiveConfiguration,
+              var ledger = AudioDuckingControlOwnership(baseline: baseline) else { return false }
+        let percent = min(100, max(0, Double(level / peak) * 100))
+        do { try persist(.confirmed, snapshot: current, baseline: baseline) }
+        catch { failureReason = "journal_confirm_failed"; unresolvedWrite = true; cleanupUnsafe = true; relinquish(token: token, incomplete: true); return true }
+        guard lease.adoptUserLevel(current.values, token: token) else { return false }
+        // The owner explicitly defines manual volume changes during recording
+        // as a retained-level adjustment; the original baseline is preserved.
+        guard ledger.adoptUserLevel(current.values) else { return false }
+        ownership = ledger
+        config.retainedPercent = percent
+        effectiveConfiguration = config
+        manualAdjustment = (UUID(), current.uid, percent)
+        return true
+    }
+
     var hasPendingWrite: Bool { pendingWrite != nil }
     var hasOwnershipCycle: Bool {
         unresolvedWrite || pendingWrite != nil || (ownership?.states.contains { state in
@@ -179,7 +200,7 @@ final class AudioDuckingRuntime {
         if pendingWrite != nil { pendingRetainedPercent = percent; return }
         config.retainedPercent = percent
         effectiveConfiguration = config
-        guard lease.transition != nil, let initial = beginSnapshot,
+        guard lease.baseline != nil, let initial = beginSnapshot,
               let current = output.readDefault(), current.hasSameControls(as: initial),
               current.muted == initial.muted, current.values == lease.lastConfirmed else { return }
         if lease.activate(token, values: current.values, config: config, now: now) {
@@ -210,6 +231,7 @@ final class AudioDuckingRuntime {
             relinquish(token: token, incomplete: true); return
         }
         guard current.values == lease.lastConfirmed else {
+            if adoptUserLevel(current, token: token) { return }
             // No setter is pending here. A different current value belongs to
             // the user, so relinquish and remove the old recovery obligation.
             failureReason = "user_volume_changed"
@@ -345,6 +367,8 @@ final class AudioDuckingRuntime {
                 return
             }
             guard current.values != confirmed else { return }
+            guard let latest = output.readDefault(), latest == current else { return }
+            if adoptUserLevel(current, token: token) { return }
             failureReason = "user_volume_changed"
             do { try journal?.clear() }
             catch { unresolvedWrite = true; cleanupUnsafe = true }

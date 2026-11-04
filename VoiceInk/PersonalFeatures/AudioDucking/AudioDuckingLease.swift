@@ -53,6 +53,14 @@ struct AudioDuckingLease {
         return transition != nil
     }
 
+    mutating func adoptUserLevel(_ values: [Float], token: Token) -> Bool {
+        guard self.token == token, !suppressed, !ended, !restoring,
+              baseline?.count == values.count, values.allSatisfy({ $0.isFinite && (0...1).contains($0) }) else { return false }
+        lastConfirmed = values
+        transition = nil
+        return true
+    }
+
     /// Duplicate stops do not reset the original deadline or cancel the lease.
     mutating func end(_ token: Token, config: AudioDuckingConfiguration, now: TimeInterval) {
         guard token == self.token, !suppressed else { return }

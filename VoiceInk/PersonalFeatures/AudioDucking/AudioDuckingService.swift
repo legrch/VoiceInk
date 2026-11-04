@@ -30,6 +30,8 @@ final class AudioDuckingService {
     private let logger = Logger(subsystem: "com.prakashjoshipax.VoiceInk", category: "AudioDucking")
     private var lastReportedStatus: AudioDuckingRuntime.Status?
     private var lastReportedQuarantine: Bool?
+    private var lastReportedAdjustmentID: UUID?
+    var manualAdjustment: (id: UUID, uid: String, percent: Double)? { queue.sync { runtime.manualAdjustment } }
     private var outputAddress = AudioObjectPropertyAddress(
         mSelector: kAudioHardwarePropertyDefaultOutputDevice,
         mScope: kAudioObjectPropertyScopeGlobal,
@@ -80,6 +82,13 @@ final class AudioDuckingService {
     var hasOwnershipCycle: Bool { queue.sync { runtime.hasOwnershipCycle || recoveryBlocked } }
     var isQuarantined: Bool { queue.sync { runtime.isQuarantined || recoveryBlocked } }
     var currentOutputIdentity: (uid: String, name: String)? { queue.sync { AudioDuckingCoreAudio().currentOutputIdentity() } }
+
+    var currentVolumeReading: (percent: Double, muted: Bool?)? {
+        queue.sync {
+            guard let snapshot = AudioDuckingCoreAudio().readDefault(), let peak = snapshot.values.max() else { return nil }
+            return (Double(peak) * 100, snapshot.muted)
+        }
+    }
 
     var canAcknowledgeRecovery: Bool {
         queue.sync {
@@ -252,7 +261,8 @@ final class AudioDuckingService {
 
     private func publishStatus(_ status: AudioDuckingRuntime.Status) {
         let quarantined = runtime.isQuarantined || recoveryBlocked
-        guard lastReportedStatus != status || lastReportedQuarantine != quarantined else { return }
+        guard lastReportedStatus != status || lastReportedQuarantine != quarantined || lastReportedAdjustmentID != runtime.manualAdjustment?.id else { return }
+        lastReportedAdjustmentID = runtime.manualAdjustment?.id
         lastReportedStatus = status
         lastReportedQuarantine = quarantined
         if status == .incomplete || status == .unavailable {

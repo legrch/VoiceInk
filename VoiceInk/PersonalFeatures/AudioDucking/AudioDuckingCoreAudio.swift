@@ -171,15 +171,9 @@ struct AudioDuckingCoreAudio {
         var layout = Data()
         let selector: AudioObjectPropertySelector
         let elements: [UInt32]
-        if writable(device, element: 0, selector: kAudioHardwareServiceDeviceProperty_VirtualMainVolume),
-           let stereo = virtualStereo(device) {
-            channels = stereo.channels
-            balance = stereo.balance
-            layout = stereo.layout
-            control = .virtualMain
-            elements = [0]
-            selector = kAudioHardwareServiceDeviceProperty_VirtualMainVolume
-        } else if writable(device, element: 0, selector: kAudioDevicePropertyVolumeScalar) {
+        // Prefer actual controls over the virtual composite. The latter can
+        // emit intermediate balance notifications while updating stereo volume.
+        if writable(device, element: 0, selector: kAudioDevicePropertyVolumeScalar) {
             control = .physicalMain
             elements = [0]
             selector = kAudioDevicePropertyVolumeScalar
@@ -189,6 +183,14 @@ struct AudioDuckingCoreAudio {
             elements = stereo.channels
             layout = stereo.layout
             selector = kAudioDevicePropertyVolumeScalar
+        } else if writable(device, element: 0, selector: kAudioHardwareServiceDeviceProperty_VirtualMainVolume),
+                  let stereo = virtualStereo(device) {
+            channels = stereo.channels
+            balance = stereo.balance
+            layout = stereo.layout
+            control = .virtualMain
+            elements = [0]
+            selector = kAudioHardwareServiceDeviceProperty_VirtualMainVolume
         } else { return nil }
         let values = elements.compactMap { volume(device, element: $0, selector: selector) }
         guard values.count == elements.count else { return nil }

@@ -1,4 +1,5 @@
 import CoreAudio
+import Combine
 import SwiftUI
 
 @MainActor
@@ -52,6 +53,14 @@ struct AudioSetupView: View {
                     if let name = mediaController.audioOutputName {
                         LabeledContent("Current Output", value: name)
                     }
+                    LabeledContent("Current Volume") {
+                        if let percent = mediaController.currentOutputVolumePercent {
+                            Text(mediaController.currentOutputMuted ? "Muted" : "\(Int(percent.rounded())) %")
+                                .monospacedDigit()
+                        } else {
+                            Text("Unavailable").foregroundStyle(.secondary)
+                        }
+                    }
                     HStack {
                         Text("Volume During Recording")
                         Slider(value: deviceRetainedPercent, in: 0...100, step: 1)
@@ -94,7 +103,11 @@ struct AudioSetupView: View {
         }
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)
+        .onReceive(Timer.publish(every: 0.3, on: .main, in: .common).autoconnect()) { _ in
+            mediaController.refreshOutputVolume()
+        }
         .onAppear {
+            mediaController.refreshOutputVolume()
             if !usesPriorityOrder {
                 microphoneSourceBeforePriorityOrder = currentMicrophoneSource
             }

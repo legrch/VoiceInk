@@ -594,7 +594,19 @@ overrideOutput.devices[1] = AudioDuckingOutputSnapshot(deviceID: 1, uid: "one", 
 overrideRuntime.tick(token: overrideToken, now: 0.2)
 check(overrideOutput.devices[1]!.values == [0.4] && !overrideRuntime.isQuarantined,
       "manual volume change is preserved without a permanent unresolved-write quarantine")
-if case .absent = try overrideJournal.read() {} else { check(false, "manual takeover clears the stale recovery obligation") }
+if case .record(let entry) = try overrideJournal.read() {
+    check(entry.baseline == [0.6] && entry.confirmed == [0.4], "manual recording level preserves original baseline durably")
+} else { check(false, "manual level retains restoration responsibility") }
+check(abs((overrideRuntime.manualAdjustment?.percent ?? 0) - 66.6667) < 0.001, "manual volume is converted to retained percentage")
+overrideRuntime.updateRetainedPercent(50, token: overrideToken, now: 0.3)
+overrideRuntime.volumeChanged(token: overrideToken, now: 0.4)
+check(abs(overrideOutput.devices[1]!.values[0] - 0.3) < 0.0001 && overrideRuntime.lease.baseline == [0.6],
+      "settings adjustment after manual volume still uses the original baseline")
+overrideRuntime.end(token: overrideToken, now: 1)
+overrideRuntime.tick(token: overrideToken, now: 4)
+overrideRuntime.volumeChanged(token: overrideToken, now: 4.1)
+check(overrideRuntime.status == .idle && overrideOutput.devices[1]!.values == [0.6],
+      "manual volume followed by settings adjustment restores the pre-recording baseline")
 try FileManager.default.removeItem(at: overrideDirectory)
 
 let callbackDirectory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("voiceink-manual-callback-\(UUID().uuidString)")
@@ -610,8 +622,9 @@ callbackOutput.devices[1] = AudioDuckingOutputSnapshot(deviceID: 1, uid: "one", 
 callbackRuntime.volumeChanged(token: callbackToken, now: 0.2, observed: callbackOutput.devices[1])
 callbackRuntime.end(token: callbackToken, now: 0.3)
 callbackRuntime.tick(token: callbackToken, now: 4)
-check(callbackOutput.writes.count == callbackWrites && callbackOutput.devices[1]!.values == [0.4],
-      "a manual volume notification after fade prevents restoration without needing a timer")
+callbackRuntime.volumeChanged(token: callbackToken, now: 4.1)
+check(callbackOutput.writes.count == callbackWrites + 1 && callbackOutput.devices[1]!.values == [0.6] && callbackRuntime.status == .idle,
+      "a manual recording level restores the original baseline after Stop")
 if case .absent = try callbackJournal.read() {} else { check(false, "callback manual takeover clears the stale recovery obligation") }
 try FileManager.default.removeItem(at: callbackDirectory)
 

@@ -18,6 +18,16 @@ struct AudioDuckingControlOwnership {
         states = Array(repeating: .untouched, count: baseline.count)
     }
 
+    /// The owner requests restoration to the original baseline after a manual
+    /// recording-level adjustment. This is not attributed to an app setter.
+    mutating func adoptUserLevel(_ values: [Float]) -> Bool {
+        guard values.count == baseline.count, values.allSatisfy({ $0.isFinite && (0...1).contains($0) }) else { return false }
+        states = zip(values, baseline).map { value, original in
+            value == original ? .untouched : .owned(lastConfirmed: value)
+        }
+        return true
+    }
+
     /// A failed setter or absent readback is ambiguous even when the setter
     /// reported an error: the hardware may already have applied the change.
     mutating func recordWrite(index: Int, before: Float, reportedSuccess: Bool, readback: Float?) {

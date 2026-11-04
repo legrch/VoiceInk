@@ -12,8 +12,11 @@ final class MediaController: ObservableObject {
     @Published private(set) var canAcknowledgeDuckingRecovery = false
     @Published private(set) var audioOutputUID: String?
     @Published private(set) var audioOutputName: String?
+    @Published private(set) var currentOutputVolumePercent: Double?
+    @Published private(set) var currentOutputMuted = false
     private var duckingService: AudioDuckingService?
     private var duckingToken: AudioDuckingLease.Token?
+    private var lastManualAdjustmentID: UUID?
     private var effectiveMode: AudioDuckingConfiguration.Mode = .unchanged
 
     var duckingConfigurationPending: Bool {
@@ -52,9 +55,21 @@ final class MediaController: ObservableObject {
                 let identity = self?.duckingService?.currentOutputIdentity
                 self?.audioOutputUID = identity?.uid
                 self?.audioOutputName = identity?.name
+                if let self, let adjustment = self.duckingService?.manualAdjustment, self.lastManualAdjustmentID != adjustment.id {
+                    self.lastManualAdjustmentID = adjustment.id
+                    var desired = self.duckingSettings.configuration
+                    desired.setRetainedPercent(adjustment.percent, for: adjustment.uid)
+                    self.duckingSettings.set(desired)
+                }
                 if status == .incomplete { self?.incompleteDuckingRestoration = true }
             }
         }
+    }
+
+    func refreshOutputVolume() {
+        let reading = duckingService?.currentVolumeReading
+        currentOutputVolumePercent = reading?.percent
+        currentOutputMuted = reading?.muted == true
     }
 
     func updateDuckingLevel(_ percent: Double) {
