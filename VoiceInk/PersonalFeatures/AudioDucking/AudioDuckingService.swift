@@ -263,6 +263,32 @@ final class AudioDuckingService {
         }
     }
 
+    /// Explicit slider input also replaces the old recovery acknowledgement UI.
+    /// Archives evidence without a HAL write before accepting a new user command.
+    func setCurrentVolumePercent(_ percent: Double) {
+        guard percent.isFinite, (0...100).contains(percent) else { return }
+        if isQuarantined || canAcknowledgeRecovery {
+            guard acknowledgeRecovery() else { return }
+        }
+        let standalone = queue.sync { runtime.standaloneVolumeAdjustment || runtime.status != .active }
+        var token = queue.sync { runtime.lease.token }
+        if standalone && !queue.sync(execute: { runtime.standaloneVolumeAdjustment }) {
+            var config = AudioDuckingConfiguration(mode: .duck)
+            config.fadeDownSeconds = 0
+            config.fadeUpSeconds = 0
+            config.restoreDelaySeconds = 0
+            token = begin(sessionID: UUID(), desired: config)
+        }
+        guard let token else { return }
+        queue.async { [weak self] in
+            guard let self, self.latch.permits(token) else { return }
+            self.runtime.setCurrentVolumePercent(percent, token: token, standalone: standalone,
+                                                  now: ProcessInfo.processInfo.systemUptime)
+            self.publishStatus(self.runtime.status)
+            self.schedule(token: token)
+        }
+    }
+
     private func publishStatus(_ status: AudioDuckingRuntime.Status) {
         let quarantined = runtime.isQuarantined || recoveryBlocked
         guard lastReportedStatus != status || lastReportedQuarantine != quarantined || lastReportedAdjustmentID != runtime.manualAdjustment?.id else { return }
@@ -297,7 +323,15 @@ final class AudioDuckingService {
             var address = AudioObjectPropertyAddress(mSelector: selector, mScope: scope, mElement: 0)
             guard AudioObjectHasProperty(device, &address) else { continue }
             let callback: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-                self?.deviceEventOccurred(token: token, reason: "device property \(selector)")
+                // Only mute produces harmless duplicate notifications during
+                // ordinary volume adjustments. Lifecycle events still latch
+                // immediately, even if their readback happens to look unchanged.
+                guard selector == kAudioDevicePropertyMute,
+                      let current = AudioDuckingCoreAudio().readDefault(),
+                      !current.requiresInvalidation(comparedWith: snapshot) else {
+                    self?.deviceEventOccurred(token: token, reason: "device property \(selector)")
+                    return
+                }
             }
             guard AudioObjectAddPropertyListenerBlock(device, &address, notificationQueue, callback) == noErr else {
                 removeDeviceListeners()

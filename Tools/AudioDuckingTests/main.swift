@@ -621,7 +621,7 @@ check(overrideOutput.devices[1]!.values == [0.4] && !overrideRuntime.isQuarantin
 if case .record(let entry) = try overrideJournal.read() {
     check(entry.baseline == [0.6] && entry.confirmed == [0.4], "manual recording level preserves original baseline durably")
 } else { check(false, "manual level retains restoration responsibility") }
-check(abs((overrideRuntime.manualAdjustment?.percent ?? 0) - 66.6667) < 0.001, "manual volume is converted to retained percentage")
+check(overrideRuntime.manualAdjustment?.percent == 67, "manual volume is converted to retained percentage")
 overrideRuntime.updateRetainedPercent(50, token: overrideToken, now: 0.3)
 overrideRuntime.volumeChanged(token: overrideToken, now: 0.4)
 check(abs(overrideOutput.devices[1]!.values[0] - 0.3) < 0.0001 && overrideRuntime.lease.baseline == [0.6],
@@ -831,3 +831,87 @@ quantizedRuntime.end(token: quantizedToken, now: 2)
 quantizedRuntime.tick(token: quantizedToken, now: 4)
 check(quantizedRuntime.status == .idle && abs(quantized.devices[1]!.values[0] - 0.6) < 0.0001,
       "quantized output restores its original level")
+
+// Duplicate HAL notifications do not imply a mute/topology change.
+let eventBaseline = AudioDuckingOutputSnapshot(deviceID: 1, uid: "one", elements: [1, 2], values: [0.6, 0.3], muted: false)
+let volumeOnlyEvent = AudioDuckingOutputSnapshot(deviceID: 1, uid: "one", elements: [1, 2], values: [0.2, 0.1], muted: false)
+check(!volumeOnlyEvent.requiresInvalidation(comparedWith: eventBaseline), "duplicate mute notification during a volume change preserves the recording")
+let muteEvent = AudioDuckingOutputSnapshot(deviceID: 1, uid: "one", elements: [1, 2], values: [0.2, 0.1], muted: true)
+check(muteEvent.requiresInvalidation(comparedWith: eventBaseline), "an actual mute change still invalidates")
+let deviceEvent = AudioDuckingOutputSnapshot(deviceID: 2, uid: "two", elements: [1, 2], values: [0.2, 0.1], muted: false)
+check(deviceEvent.requiresInvalidation(comparedWith: eventBaseline), "an actual device change still invalidates")
+
+// A system key adjustment immediately followed by Stop must not lose baseline.
+let lastMomentOutput = makeOutput([0.6, 0.3])
+let lastMomentRuntime = AudioDuckingRuntime(output: lastMomentOutput)
+let lastMomentToken = lastMomentRuntime.begin(sessionID: UUID(), desired: runtimeConfig)!
+lastMomentRuntime.activate(token: lastMomentToken, now: 0)
+lastMomentOutput.devices[1] = AudioDuckingOutputSnapshot(deviceID: 1, uid: "one", elements: [1, 2], values: [0.24, 0.12], muted: false)
+lastMomentRuntime.end(token: lastMomentToken, now: 1)
+check(lastMomentRuntime.lease.baseline == [0.6, 0.3] && lastMomentRuntime.manualAdjustment?.percent == 40,
+      "Stop captures a queued manual adjustment without changing the original baseline")
+lastMomentRuntime.tick(token: lastMomentToken, now: 4)
+check(lastMomentRuntime.status == .idle && lastMomentOutput.devices[1]!.values == [0.6, 0.3],
+      "manual adjustment immediately before Stop restores both original channel levels")
+
+// Current Volume controls the actual level; recording retains its baseline.
+let sliderOutput = makeOutput([0.6, 0.3])
+let sliderRuntime = AudioDuckingRuntime(output: sliderOutput)
+let sliderToken = sliderRuntime.begin(sessionID: UUID(), desired: runtimeConfig)!
+sliderRuntime.activate(token: sliderToken, now: 0)
+sliderRuntime.setCurrentVolumePercent(30, token: sliderToken, now: 0.2)
+check(AudioDuckingOutputSnapshot.levelsMatch(sliderOutput.devices[1]!.values, [0.3, 0.15]) && sliderRuntime.manualAdjustment?.percent == 50,
+      "Current Volume slider sets an absolute level and stores the relative retained percentage")
+check(sliderRuntime.lease.baseline == [0.6, 0.3], "Current Volume never changes the recording baseline")
+sliderRuntime.end(token: sliderToken, now: 1)
+sliderRuntime.tick(token: sliderToken, now: 4)
+check(sliderOutput.devices[1]!.values == [0.6, 0.3] && sliderRuntime.status == .idle,
+      "Current Volume slider adjustment restores the original stereo baseline")
+
+// Standalone volume changes finish at the requested level, not the old volume.
+let directDirectory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("voiceink-direct-volume-\(UUID().uuidString)")
+let directJournal = try AudioDuckingRecoveryJournal(directory: directDirectory)
+let directOutput = makeOutput([0.6, 0.3])
+directOutput.requiresWriteNotification = true
+directOutput.deferWrites = true
+let directRuntime = AudioDuckingRuntime(output: directOutput, journal: directJournal)
+let directToken = directRuntime.begin(sessionID: UUID(), desired: runtimeConfig)!
+directRuntime.setCurrentVolumePercent(40, token: directToken, standalone: true, now: 0)
+if case .record(let entry) = try directJournal.read() {
+    check(AudioDuckingOutputSnapshot.levelsMatch(entry.baseline, [0.4, 0.2]) && entry.phase == .writeIntent,
+          "standalone slider journals the requested completion goal before writing")
+} else { check(false, "standalone slider preserves crash evidence") }
+directRuntime.setCurrentVolumePercent(50, token: directToken, standalone: true, now: 0.01)
+for step in 1...4 {
+    directOutput.deliverPendingWrite()
+    directRuntime.volumeChanged(token: directToken, now: Double(step) * 0.1)
+}
+check(directRuntime.status == .idle && AudioDuckingOutputSnapshot.levelsMatch(directOutput.devices[1]!.values, [0.5, 0.25]),
+      "rapid standalone slider commands serialize all channel writes and finish at the latest user level")
+if case .absent = try directJournal.read() {} else { check(false, "standalone volume completion clears its journal") }
+try FileManager.default.removeItem(at: directDirectory)
+print("AudioDucking user volume and duplicate event checks passed")
+
+let pendingSliderOutput = makeOutput([0.6])
+pendingSliderOutput.requiresWriteNotification = true
+pendingSliderOutput.deferWrites = true
+let pendingSliderRuntime = AudioDuckingRuntime(output: pendingSliderOutput)
+let pendingSliderToken = pendingSliderRuntime.begin(sessionID: UUID(), desired: runtimeConfig)!
+pendingSliderRuntime.activate(token: pendingSliderToken, now: 0)
+pendingSliderRuntime.setCurrentVolumePercent(30, token: pendingSliderToken, now: 0.01)
+pendingSliderOutput.deliverPendingWrite()
+pendingSliderRuntime.volumeChanged(token: pendingSliderToken, now: 0.1)
+pendingSliderOutput.deliverPendingWrite()
+pendingSliderRuntime.volumeChanged(token: pendingSliderToken, now: 0.2)
+check(pendingSliderRuntime.lease.baseline == [0.6] && pendingSliderRuntime.manualAdjustment?.percent == 50,
+      "a recording slider command waits for the existing fade write without changing baseline")
+pendingSliderRuntime.end(token: pendingSliderToken, now: 1)
+pendingSliderRuntime.tick(token: pendingSliderToken, now: 4)
+pendingSliderOutput.deliverPendingWrite()
+pendingSliderRuntime.volumeChanged(token: pendingSliderToken, now: 4.1)
+check(pendingSliderRuntime.status == .idle && pendingSliderOutput.devices[1]!.values == [0.6],
+      "a slider command queued behind a fade still restores the original volume")
+let retiredWriteCount = pendingSliderOutput.writes.count
+pendingSliderRuntime.setCurrentVolumePercent(10, token: pendingSliderToken, now: 5)
+check(pendingSliderOutput.writes.count == retiredWriteCount, "a stale slider command cannot change a completed recording")
+print("AudioDucking queued volume control checks passed")

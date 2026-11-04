@@ -54,12 +54,16 @@ struct AudioSetupView: View {
                         LabeledContent("Current Output", value: name)
                     }
                     if let original = mediaController.outputRestoreVolumePercent {
-                        LabeledContent("Volume After Recording", value: "\(Int(original.rounded())) %")
+                        LabeledContent("Volume Before Recording", value: "\(Int(original.rounded())) %")
                     }
                     LabeledContent("Current Volume") {
                         if let percent = mediaController.currentOutputVolumePercent {
-                            Text(mediaController.currentOutputMuted ? "Muted" : "\(Int(percent.rounded())) %")
+                            Slider(value: Binding(get: { mediaController.currentOutputVolumePercent ?? percent },
+                                                  set: { mediaController.setCurrentOutputVolume($0) }), in: 0...100, step: 1)
+                                .accessibilityLabel("Current output volume")
+                            Text("\(Int(percent.rounded())) %")
                                 .monospacedDigit()
+                                .frame(width: 48, alignment: .trailing)
                         } else {
                             Text("Unavailable").foregroundStyle(.secondary)
                         }
@@ -67,7 +71,7 @@ struct AudioSetupView: View {
                     HStack {
                         Text("Volume During Recording")
                         Slider(value: deviceRetainedPercent, in: 0...100, step: 1)
-                        TextField("", value: deviceRetainedPercent, format: .number)
+                        TextField("", value: deviceRetainedPercent, format: .number.precision(.fractionLength(0)))
                             .frame(width: 55)
                             .accessibilityLabel("Retained volume percent")
                         Text("%")
@@ -88,15 +92,7 @@ struct AudioSetupView: View {
                     Text("Audio changes take effect after the current restoration finishes.")
                         .foregroundStyle(.secondary)
                 }
-                if mediaController.duckingQuarantined || mediaController.canAcknowledgeDuckingRecovery {
-                    HStack {
-                        Text("Volume control is paused. Check your output volume before resuming.")
-                            .foregroundStyle(.secondary)
-                        if mediaController.canAcknowledgeDuckingRecovery {
-                            Button("Resume") { mediaController.acknowledgeDuckingRecovery() }
-                        }
-                    }
-                } else if mediaController.duckingStatus == .unavailable {
+                if mediaController.duckingStatus == .unavailable {
                     Text("Audio ducking is unavailable for the current output.")
                         .foregroundStyle(.secondary)
                 }
@@ -150,7 +146,7 @@ struct AudioSetupView: View {
     private var deviceRetainedPercent: Binding<Double> {
         Binding(get: { duckingSettings.configuration.retainedPercent(for: mediaController.audioOutputUID) }, set: { newValue in
             var value = duckingSettings.configuration
-            value.setRetainedPercent(newValue, for: mediaController.audioOutputUID)
+            value.setRetainedPercent(newValue.rounded(), for: mediaController.audioOutputUID)
             if duckingSettings.set(value) { mediaController.updateDuckingLevel(newValue) }
         })
     }

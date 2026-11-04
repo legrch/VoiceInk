@@ -61,6 +61,25 @@ struct AudioDuckingLease {
         return true
     }
 
+    /// Explicit user control retains the recording baseline. A standalone volume
+    /// command instead has the requested level as its durable completion goal.
+    mutating func setUserTarget(_ values: [Float], current: [Float], token: Token,
+                                standalone: Bool, now: TimeInterval) -> Bool {
+        guard self.token == token, !suppressed, now.isFinite,
+              values.count == current.count, !values.isEmpty,
+              (values + current).allSatisfy({ $0.isFinite && (0...1).contains($0) }),
+              standalone || (!ended && !restoring && baseline != nil) else { return false }
+        if standalone {
+            baseline = values
+            ended = true
+            restoring = true
+            restoreDeadline = now
+        }
+        lastConfirmed = current
+        transition = AudioDuckingTransition(start: current, end: values, startTime: now, duration: 0)
+        return transition != nil
+    }
+
     /// Duplicate stops do not reset the original deadline or cancel the lease.
     mutating func end(_ token: Token, config: AudioDuckingConfiguration, now: TimeInterval) {
         guard token == self.token, !suppressed else { return }

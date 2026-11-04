@@ -59,7 +59,7 @@ final class MediaController: ObservableObject {
                 if let self, let adjustment = self.duckingService?.manualAdjustment, self.lastManualAdjustmentID != adjustment.id {
                     self.lastManualAdjustmentID = adjustment.id
                     var desired = self.duckingSettings.configuration
-                    desired.setRetainedPercent(adjustment.percent, for: adjustment.uid)
+                    desired.setRetainedPercent(adjustment.percent.rounded(), for: adjustment.uid)
                     self.duckingSettings.set(desired)
                 }
                 if status == .incomplete { self?.incompleteDuckingRestoration = true }
@@ -72,6 +72,10 @@ final class MediaController: ObservableObject {
         currentOutputVolumePercent = reading?.percent
         outputRestoreVolumePercent = reading?.restorePercent
         currentOutputMuted = reading?.muted == true
+    }
+
+    func setCurrentOutputVolume(_ percent: Double) {
+        duckingService?.setCurrentVolumePercent(percent.rounded())
     }
 
     func updateDuckingLevel(_ percent: Double) {
