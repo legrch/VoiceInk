@@ -76,26 +76,17 @@ struct AudioSetupView: View {
                     Text("Audio changes take effect after the current restoration finishes.")
                         .foregroundStyle(.secondary)
                 }
-                if mediaController.incompleteDuckingRestoration {
+                if mediaController.duckingQuarantined || mediaController.canAcknowledgeDuckingRecovery {
                     HStack {
-                        Text("Audio could not be fully restored. Check your output volume.")
-                            .foregroundStyle(.orange)
-                        Button("Dismiss") { mediaController.dismissIncompleteDuckingRestoration() }
+                        Text("Volume control is paused. Check your output volume before resuming.")
+                            .foregroundStyle(.secondary)
+                        if mediaController.canAcknowledgeDuckingRecovery {
+                            Button("Resume") { mediaController.acknowledgeDuckingRecovery() }
+                        }
                     }
                 } else if mediaController.duckingStatus == .unavailable {
                     Text("Audio ducking is unavailable for the current output.")
                         .foregroundStyle(.secondary)
-                }
-                if mediaController.canAcknowledgeDuckingRecovery {
-                    Button("I set the volume — acknowledge recovery") {
-                        mediaController.acknowledgeDuckingRecovery()
-                    }
-                    Text("Acknowledge only after setting your current output volume. This does not restore volume or cancel a previously pending system change.")
-                        .foregroundStyle(.secondary)
-                }
-                if mediaController.duckingQuarantined {
-                    Text("Audio changes are paused because a change could not be safely confirmed. Check your output volume; a delayed change may still occur.")
-                        .foregroundStyle(.orange)
                 }
             } header: {
                 Text("Audio Ducking")

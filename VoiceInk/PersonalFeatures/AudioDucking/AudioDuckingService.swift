@@ -100,14 +100,20 @@ final class AudioDuckingService {
             let output = AudioDuckingCoreAudio()
             guard let snapshot = output.readDefault(), snapshot.muted != nil else { return false }
             do {
-                guard try journal.acknowledge(uid: snapshot.uid, observed: snapshot, now: Date(), commit: { operation in
-                    guard let current = output.readDefault(), current == snapshot else { return false }
-                    return try self.latch.performIfCurrent(epoch) {
-                        guard !self.runtime.hasPendingWrite, self.recoveryToken == nil else { return false }
-                        try operation()
-                        return true
-                    } ?? false
-                }) else { return false }
+                var accepted = false
+                for _ in 0..<64 {
+                    guard try journal.pendingIntent(for: snapshot.uid) != nil else { break }
+                    guard try journal.acknowledge(uid: snapshot.uid, observed: snapshot, now: Date(), commit: { operation in
+                        guard let current = output.readDefault(), current == snapshot else { return false }
+                        return try self.latch.performIfCurrent(epoch) {
+                            guard !self.runtime.hasPendingWrite, self.recoveryToken == nil else { return false }
+                            try operation()
+                            return true
+                        } ?? false
+                    }) else { return false }
+                    accepted = true
+                }
+                guard accepted, try journal.pendingIntent(for: snapshot.uid) == nil else { return false }
                 timer?.cancel(); timer = nil
                 recoveryTimer?.cancel(); recoveryTimer = nil
                 if let token = runtime.lease.token { _ = latch.invalidate(ifCurrent: token); latch.clear(token) }
@@ -389,7 +395,7 @@ final class AudioDuckingService {
                 self.runtime.invalidate(token: token)
                 self.latch.clear(token)
             }
-            if self.recoveryContinuityLost { _ = self.holdMissingRecoveryIfPossible() }
+            if self.recoveryContinuityLost { _ = self.holdOtherOutputRecoveryIfPossible() }
             guard !self.recoveryContinuityLost else { self.publishStatus(.incomplete); return }
             self.startRecovery()
         }
@@ -472,21 +478,20 @@ final class AudioDuckingService {
                 self.recoveryContinuityLost = true
             }
             self.latch.clear(token)
-            if self.holdMissingRecoveryIfPossible() { self.publishStatus(.idle) }
+            if self.holdOtherOutputRecoveryIfPossible() { self.publishStatus(.idle) }
             else { self.publishStatus(self.runtime.status) }
             self.scheduleRecoveryObservation()
         }
     }
 
-    /// Preserve an absent device before releasing global quarantine. Both the
-    /// named-device check and the current UID must be available and distinct.
-    private func holdMissingRecoveryIfPossible() -> Bool {
+    /// Preserve another output's evidence without quarantining the selected
+    /// output. Its own UID remains blocked, including while it is connected.
+    private func holdOtherOutputRecoveryIfPossible() -> Bool {
         guard recoveryToken == nil, !runtime.hasPendingWrite,
               runtime.status != .active, runtime.status != .restoring,
               let journal, case .record(let record) = try? journal.read(),
               let identity = AudioDuckingCoreAudio().currentOutputIdentity(),
-              identity.uid != record.deviceUID,
-              AudioDuckingCoreAudio().device(forUID: record.deviceUID) == nil else { return false }
+              identity.uid != record.deviceUID else { return false }
         do {
             try journal.holdMissingDevice(record)
             timer?.cancel(); timer = nil
@@ -504,7 +509,7 @@ final class AudioDuckingService {
     /// The queue serializes startup and route recovery against new sessions.
     private func startRecovery() {
         guard let recovery else { recoveryBlocked = true; publishStatus(.incomplete); return }
-        _ = holdMissingRecoveryIfPossible()
+        _ = holdOtherOutputRecoveryIfPossible()
         recovery.prepare()
         switch recovery.state {
         case .idle:

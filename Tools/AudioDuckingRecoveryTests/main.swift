@@ -120,6 +120,23 @@ check(acceptedHeld, "held intent can be acknowledged without touching another ac
 if case .record(let remaining) = try independentJournal.read() { check(remaining == unrelated, "unrelated pending intent is preserved") }
 else { check(false, "unrelated pending intent must remain") }
 
+let multipleDirectory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("voiceink-multiple-\(UUID().uuidString)")
+defer { try? FileManager.default.removeItem(at: multipleDirectory) }
+let multipleJournal = try AudioDuckingRecoveryJournal(directory: multipleDirectory)
+let earlierIntent = record(phase: .writeIntent, intended: [0.2])
+let laterIntent = record(phase: .writeIntent, intended: [0.3])
+try multipleJournal.write(earlierIntent)
+try multipleJournal.holdMissingDevice(earlierIntent)
+try multipleJournal.write(laterIntent)
+var completedCount = 0
+while try multipleJournal.pendingIntent(for: "device-uid") != nil {
+    let completed = try multipleJournal.acknowledge(uid: "device-uid", observed: snapshot(value: 0.4), now: Date(), commit: { operation in try operation(); return true })
+    check(completed, "each historical intent is durably archived")
+    completedCount += 1
+    check(completedCount <= 2, "recovery cannot loop over the same accepted intent")
+}
+let multipleBlocked = try multipleJournal.isAcknowledgedDeviceBlocked("device-uid")
+check(completedCount == 2 && !multipleBlocked, "multiple intents for one UID can be resumed together")
 let restartDirectory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("voiceink-relaunch-\(UUID().uuidString)")
 defer { try? FileManager.default.removeItem(at: restartDirectory) }
 func writeBeforeRelaunch(_ directory: URL, _ pending: AudioDuckingRecoveryRecord) throws {
