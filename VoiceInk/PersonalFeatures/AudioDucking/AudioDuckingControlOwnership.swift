@@ -36,15 +36,15 @@ struct AudioDuckingControlOwnership {
         case .uncertain, .relinquished:
             return
         case .untouched:
-            guard before == baseline[index] else { states[index] = .relinquished; return }
+            guard AudioDuckingOutputSnapshot.scalarMatches(before, baseline[index]) else { states[index] = .relinquished; return }
         case .owned(let lastConfirmed):
-            guard before == lastConfirmed else { states[index] = .relinquished; return }
+            guard AudioDuckingOutputSnapshot.scalarMatches(before, lastConfirmed) else { states[index] = .relinquished; return }
         }
         guard reportedSuccess, let value = readback, value.isFinite, (0...1).contains(value) else {
             states[index] = .uncertain
             return
         }
-        if value == baseline[index] {
+        if AudioDuckingOutputSnapshot.scalarMatches(value, baseline[index]) {
             states[index] = .untouched
         } else {
             states[index] = .owned(lastConfirmed: value)
@@ -56,7 +56,7 @@ struct AudioDuckingControlOwnership {
     /// topology and the applicable normal-write or named-cleanup authorization.
     mutating func ownedRestoreTarget(index: Int, current: Float) -> Float? {
         guard states.indices.contains(index), case .owned(let confirmed) = states[index] else { return nil }
-        guard current.isFinite, current == confirmed else {
+        guard current.isFinite, AudioDuckingOutputSnapshot.scalarMatches(current, confirmed) else {
             states[index] = .relinquished
             return nil
         }

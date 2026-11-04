@@ -83,10 +83,12 @@ final class AudioDuckingService {
     var isQuarantined: Bool { queue.sync { runtime.isQuarantined || recoveryBlocked } }
     var currentOutputIdentity: (uid: String, name: String)? { queue.sync { AudioDuckingCoreAudio().currentOutputIdentity() } }
 
-    var currentVolumeReading: (percent: Double, muted: Bool?)? {
+    var currentVolumeReading: (percent: Double, muted: Bool?, restorePercent: Double)? {
         queue.sync {
             guard let snapshot = AudioDuckingCoreAudio().readDefault(), let peak = snapshot.values.max() else { return nil }
-            return (Double(peak) * 100, snapshot.muted)
+            let saved = (try? journal?.pendingIntent(for: snapshot.uid))?.1.baseline.max()
+            let original = runtime.lease.baseline?.max() ?? runtime.capturedOutput?.values.max() ?? saved ?? peak
+            return (Double(peak) * 100, snapshot.muted, Double(original) * 100)
         }
     }
 
@@ -113,7 +115,9 @@ final class AudioDuckingService {
                 for _ in 0..<64 {
                     guard try journal.pendingIntent(for: snapshot.uid) != nil else { break }
                     guard try journal.acknowledge(uid: snapshot.uid, observed: snapshot, now: Date(), commit: { operation in
-                        guard let current = output.readDefault(), current == snapshot else { return false }
+                        guard let current = output.readDefault(), current.hasSameControls(as: snapshot),
+                              current.muted == snapshot.muted,
+                              AudioDuckingOutputSnapshot.levelsMatch(current.values, snapshot.values) else { return false }
                         return try self.latch.performIfCurrent(epoch) {
                             guard !self.runtime.hasPendingWrite, self.recoveryToken == nil else { return false }
                             try operation()

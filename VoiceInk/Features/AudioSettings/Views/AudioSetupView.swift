@@ -53,6 +53,9 @@ struct AudioSetupView: View {
                     if let name = mediaController.audioOutputName {
                         LabeledContent("Current Output", value: name)
                     }
+                    if let original = mediaController.outputRestoreVolumePercent {
+                        LabeledContent("Volume After Recording", value: "\(Int(original.rounded())) %")
+                    }
                     LabeledContent("Current Volume") {
                         if let percent = mediaController.currentOutputVolumePercent {
                             Text(mediaController.currentOutputMuted ? "Muted" : "\(Int(percent.rounded())) %")

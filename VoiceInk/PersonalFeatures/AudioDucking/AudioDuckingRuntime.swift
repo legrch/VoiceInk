@@ -25,6 +25,14 @@ struct AudioDuckingOutputSnapshot: Equatable {
         self.channelLayout = channelLayout
     }
 
+    static func scalarMatches(_ lhs: Float, _ rhs: Float) -> Bool {
+        lhs.isFinite && rhs.isFinite && (lhs == rhs || abs(lhs - rhs) <= max(0.000001, max(lhs.ulp, rhs.ulp) * 4))
+    }
+
+    static func levelsMatch(_ lhs: [Float], _ rhs: [Float]) -> Bool {
+        lhs.count == rhs.count && zip(lhs, rhs).allSatisfy { scalarMatches($0.0, $0.1) }
+    }
+
     func hasSameControls(as other: Self) -> Bool {
         let sameBalance: Bool
         switch (balance, other.balance) {
@@ -59,7 +67,7 @@ extension AudioDuckingOutput {
 /// Time is supplied by a monotonic clock; this object does not create tasks.
 final class AudioDuckingRuntime {
     private func sameScalar(_ lhs: Float, _ rhs: Float) -> Bool {
-        lhs == rhs || abs(lhs - rhs) <= max(0.000001, max(lhs.ulp, rhs.ulp) * 4)
+        AudioDuckingOutputSnapshot.scalarMatches(lhs, rhs)
     }
     enum Status: Equatable { case idle, active, restoring, unavailable, incomplete }
     private let output: AudioDuckingOutput
@@ -150,7 +158,7 @@ final class AudioDuckingRuntime {
         }
         if inherited {
             guard let old = beginSnapshot, snapshot.hasSameControls(as: old),
-                  snapshot.muted == old.muted, snapshot.values == lease.lastConfirmed else {
+                  snapshot.muted == old.muted, lease.lastConfirmed.map({ AudioDuckingOutputSnapshot.levelsMatch(snapshot.values, $0) }) == true else {
                 relinquish(token: token, incomplete: true)
                 return nil
             }
@@ -177,7 +185,7 @@ final class AudioDuckingRuntime {
             return
         }
         let expected = lease.lastConfirmed ?? initial.values
-        guard current.values == expected else { relinquish(token: token, incomplete: ownership != nil); return }
+        guard AudioDuckingOutputSnapshot.levelsMatch(current.values, expected) else { relinquish(token: token, incomplete: ownership != nil); return }
         guard lease.activate(token, values: current.values, config: config, now: now) else { return }
         if ownership == nil { ownership = AudioDuckingControlOwnership(baseline: initial.values) }
         tick(token: token, now: now)
@@ -202,7 +210,7 @@ final class AudioDuckingRuntime {
         effectiveConfiguration = config
         guard lease.baseline != nil, let initial = beginSnapshot,
               let current = output.readDefault(), current.hasSameControls(as: initial),
-              current.muted == initial.muted, current.values == lease.lastConfirmed else { return }
+              current.muted == initial.muted, lease.lastConfirmed.map({ AudioDuckingOutputSnapshot.levelsMatch(current.values, $0) }) == true else { return }
         if lease.activate(token, values: current.values, config: config, now: now) {
             tick(token: token, now: now)
         }
@@ -230,7 +238,7 @@ final class AudioDuckingRuntime {
             failureReason = "snapshot_changed"
             relinquish(token: token, incomplete: true); return
         }
-        guard current.values == lease.lastConfirmed else {
+        guard lease.lastConfirmed.map({ AudioDuckingOutputSnapshot.levelsMatch(current.values, $0) }) == true else {
             if adoptUserLevel(current, token: token) { return }
             // No setter is pending here. A different current value belongs to
             // the user, so relinquish and remove the old recovery obligation.
@@ -366,7 +374,7 @@ final class AudioDuckingRuntime {
                 relinquish(token: token, incomplete: true)
                 return
             }
-            guard current.values != confirmed else { return }
+            guard !AudioDuckingOutputSnapshot.levelsMatch(current.values, confirmed) else { return }
             guard let latest = output.readDefault(), latest == current else { return }
             if adoptUserLevel(current, token: token) { return }
             failureReason = "user_volume_changed"
@@ -388,8 +396,8 @@ final class AudioDuckingRuntime {
                 return
             }
             // A queued notification must not be attributed a newer readback.
-            if observed.values == pending.before.values { return }
-            guard observed.values == current.values else {
+            if AudioDuckingOutputSnapshot.levelsMatch(observed.values, pending.before.values) { return }
+            guard AudioDuckingOutputSnapshot.levelsMatch(observed.values, current.values) else {
                 failureReason = "notification_readback_changed"
                 pendingWrite = nil
                 unresolvedWrite = true
@@ -400,9 +408,9 @@ final class AudioDuckingRuntime {
         }
         // A duplicate notification from a previous write can arrive before this
         // setter takes effect. Keep waiting; the timeout preserves quarantine.
-        if current.values == pending.before.values { return }
+        if AudioDuckingOutputSnapshot.levelsMatch(current.values, pending.before.values) { return }
         guard sameScalar(current.values[pending.index], pending.target),
-              current.values.indices.allSatisfy({ $0 == pending.index || current.values[$0] == pending.before.values[$0] }) else {
+              current.values.indices.allSatisfy({ $0 == pending.index || sameScalar(current.values[$0], pending.before.values[$0]) }) else {
             failureReason = "notification_unexpected_value"
             failureLevels = (pending.before.values[pending.index], pending.target, current.values[pending.index])
             pendingWrite = nil

@@ -14,6 +14,7 @@ final class MediaController: ObservableObject {
     @Published private(set) var audioOutputName: String?
     @Published private(set) var currentOutputVolumePercent: Double?
     @Published private(set) var currentOutputMuted = false
+    @Published private(set) var outputRestoreVolumePercent: Double?
     private var duckingService: AudioDuckingService?
     private var duckingToken: AudioDuckingLease.Token?
     private var lastManualAdjustmentID: UUID?
@@ -69,6 +70,7 @@ final class MediaController: ObservableObject {
     func refreshOutputVolume() {
         let reading = duckingService?.currentVolumeReading
         currentOutputVolumePercent = reading?.percent
+        outputRestoreVolumePercent = reading?.restorePercent
         currentOutputMuted = reading?.muted == true
     }
 

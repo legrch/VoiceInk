@@ -208,7 +208,7 @@ struct AudioDuckingCoreAudio {
     func setOwnedVolume(_ value: Float, device: AudioDeviceID, element: UInt32, expected: AudioDuckingOutputSnapshot, requireDefault: Bool = false) -> AudioDuckingWriteResult {
         guard value.isFinite, (0...1).contains(value), let selected = snapshot(device: device),
               selected.elements.contains(element), let current = convert(selected), current.hasSameControls(as: expected),
-              current.muted == expected.muted, current.values == expected.values else { return .notAttempted }
+              current.muted == expected.muted, AudioDuckingOutputSnapshot.levelsMatch(current.values, expected.values) else { return .notAttempted }
         let selector = selected.control == .virtualMain ? kAudioHardwareServiceDeviceProperty_VirtualMainVolume : kAudioDevicePropertyVolumeScalar
         var property = address(selector, element: element)
         var mutableValue = value

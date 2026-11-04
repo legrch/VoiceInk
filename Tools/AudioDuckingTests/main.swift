@@ -119,6 +119,7 @@ final class FakeOutput: AudioDuckingOutput {
     var writes: [(UInt32, UInt32, Float)] = []
     var failElement: UInt32?
     var coupled = false
+    var otherChannelULPDrift = false
     var quantizationStep: Float?
     var predictsQuantization = true
     var roundingULP = false
@@ -166,6 +167,7 @@ final class FakeOutput: AudioDuckingOutput {
         var values = old.values
         values[index] = pending.2
         if coupled && values.count > 1 && index == 0 { values[1] = pending.2 }
+        if otherChannelULPDrift { for other in values.indices where other != index { values[other] = values[other].nextUp } }
         devices[pending.0] = AudioDuckingOutputSnapshot(deviceID: old.deviceID, uid: old.uid, elements: old.elements, values: values, muted: old.muted, control: old.control, stereoChannels: old.stereoChannels, balance: old.balance, channelLayout: old.channelLayout)
         pendingWrite = nil
     }
@@ -415,6 +417,28 @@ check(stereoAsyncRuntime.status == .idle && stereoAsync.devices[1]!.values == [0
       "stereo recovery independently confirms both baseline values")
 if case .absent = try stereoJournal.read() {} else { check(false, "stereo journal clears only after both restores") }
 try FileManager.default.removeItem(at: stereoDirectory)
+
+let driftedStereo = makeOutput([0.6, 0.3])
+driftedStereo.requiresWriteNotification = true
+driftedStereo.deferWrites = true
+driftedStereo.otherChannelULPDrift = true
+let driftedRuntime = AudioDuckingRuntime(output: driftedStereo)
+let driftedToken = driftedRuntime.begin(sessionID: UUID(), desired: runtimeConfig)!
+driftedRuntime.activate(token: driftedToken, now: 0)
+for step in 1...2 {
+    driftedStereo.deliverPendingWrite()
+    driftedRuntime.volumeChanged(token: driftedToken, now: Double(step) * 0.1)
+}
+check(!driftedRuntime.isQuarantined && driftedStereo.writes.count == 2,
+      "a one-ULP change in the other channel does not falsely quarantine stereo")
+driftedRuntime.end(token: driftedToken, now: 1)
+driftedRuntime.tick(token: driftedToken, now: 4)
+for step in 1...2 {
+    driftedStereo.deliverPendingWrite()
+    driftedRuntime.volumeChanged(token: driftedToken, now: 4 + Double(step) * 0.1)
+}
+check(driftedRuntime.status == .idle && AudioDuckingOutputSnapshot.levelsMatch(driftedStereo.devices[1]!.values, [0.6, 0.3]),
+      "other-channel floating point drift still restores the original stereo baseline")
 
 let stereoCoupled = makeOutput([0.6, 0.3])
 stereoCoupled.devices[1] = AudioDuckingOutputSnapshot(deviceID: 1, uid: "one", elements: [1, 2], values: [0.6, 0.3], muted: false, control: .physicalChannels, stereoChannels: [1, 2], channelLayout: Data([1]))
