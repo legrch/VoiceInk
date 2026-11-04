@@ -99,8 +99,6 @@ final class AudioDuckingRuntime {
     }
     private var pendingWrite: PendingWrite?
     private var pendingRetainedPercent: Double?
-    private var pendingCurrentVolumePercent: Double?
-    private(set) var standaloneVolumeAdjustment = false
     private(set) var manualAdjustment: (id: UUID, uid: String, percent: Double)?
 
     private func adoptUserLevel(_ current: AudioDuckingOutputSnapshot, token: AudioDuckingLease.Token) -> Bool {
@@ -202,8 +200,9 @@ final class AudioDuckingRuntime {
     func end(token: AudioDuckingLease.Token, now: TimeInterval) {
         guard token == lease.token, let config = effectiveConfiguration else { return }
         pendingRetainedPercent = nil
-        pendingCurrentVolumePercent = nil
-        // A system-volume callback may still be queued when Stop arrives.
+        // A system-volume/mute callback may still be queued when Stop arrives.
+        // Reconcile its observed metadata before entering restoration state.
+        if pendingWrite == nil { _ = observeMuteChange(token: token) }
         // Read the owner's last level before changing to restoration state.
         if pendingWrite == nil, let initial = beginSnapshot,
            let current = output.readDefault(), !current.requiresInvalidation(comparedWith: initial),
@@ -231,39 +230,6 @@ final class AudioDuckingRuntime {
         if lease.activate(token, values: current.values, config: config, now: now) {
             tick(token: token, now: now)
         }
-    }
-
-    /// Called only for an explicit movement of the Current Volume slider.
-    /// Standalone commands complete at the user-requested level; recording
-    /// commands keep the pre-recording baseline and update the retained ratio.
-    func setCurrentVolumePercent(_ percent: Double, token: AudioDuckingLease.Token,
-                                 standalone: Bool = false, now: TimeInterval) {
-        guard token == lease.token, !lease.suppressed, !unresolvedWrite,
-              normalWriteAllowed(token), percent.isFinite, (0...100).contains(percent),
-              standalone || (!lease.ended && !lease.restoring),
-              let initial = beginSnapshot,
-              let current = output.readDefault(), !current.requiresInvalidation(comparedWith: initial),
-              let reference = standalone ? initial.values : lease.baseline,
-              let peak = reference.max(), var config = effectiveConfiguration else { return }
-        if pendingWrite != nil { pendingCurrentVolumePercent = percent; return }
-        let target = reference.map { peak > 0 ? $0 / peak * Float(percent / 100) : Float(percent / 100) }
-        if standalone {
-            guard var ledger = AudioDuckingControlOwnership(baseline: target), ledger.adoptUserLevel(current.values) else { return }
-            do { try persist(.confirmed, snapshot: current, baseline: target) }
-            catch { failureReason = "journal_confirm_failed"; return }
-            ownership = ledger
-            standaloneVolumeAdjustment = true
-        } else {
-            if let confirmed = lease.lastConfirmed,
-               !AudioDuckingOutputSnapshot.levelsMatch(current.values, confirmed),
-               !adoptUserLevel(current, token: token) { return }
-            config.retainedPercent = peak > 0 ? min(100, percent / Double(peak)).rounded() : 0
-            effectiveConfiguration = config
-            manualAdjustment = (UUID(), current.uid, config.retainedPercent)
-        }
-        guard lease.setUserTarget(target, current: current.values, token: token, standalone: standalone, now: now) else { return }
-        status = standalone ? .restoring : .active
-        tick(token: token, now: now)
     }
 
     func tick(token: AudioDuckingLease.Token, now: TimeInterval) {
@@ -401,7 +367,6 @@ final class AudioDuckingRuntime {
                 ownership = nil
                 beginSnapshot = nil
                 effectiveConfiguration = nil
-                standaloneVolumeAdjustment = false
                 status = .idle
             } else {
                 failureReason = "baseline_not_reached"
@@ -482,17 +447,27 @@ final class AudioDuckingRuntime {
         ledger.recordWrite(index: pending.index, before: pending.before.values[pending.index], reportedSuccess: true, readback: current.values[pending.index])
         ownership = ledger
         lease.confirm(current.values, token: token)
-        if let percent = pendingCurrentVolumePercent {
-            pendingCurrentVolumePercent = nil
-            setCurrentVolumePercent(percent, token: token, standalone: standaloneVolumeAdjustment, now: now)
-            return
-        }
         if let percent = pendingRetainedPercent {
             pendingRetainedPercent = nil
             updateRetainedPercent(percent, token: token, now: now)
             return
         }
         tick(token: token, now: now)
+    }
+
+    /// Called with the event latch paused. A user mute change with no pending
+    /// setter may update metadata, but never the pre-recording volume or mute
+    /// hardware. An in-flight setter still makes a real mute change uncertain.
+    func observeMuteChange(token: AudioDuckingLease.Token) -> Bool {
+        guard token == lease.token, !lease.suppressed, !unresolvedWrite,
+              let initial = beginSnapshot, let current = output.readDefault(),
+              current.hasSameControls(as: initial), current.muted != nil else { return false }
+        if current.muted == initial.muted { return true }
+        guard pendingWrite == nil, !lease.ended, !lease.restoring, lease.baseline != nil else { return false }
+        beginSnapshot = AudioDuckingOutputSnapshot(deviceID: initial.deviceID, uid: initial.uid,
+            elements: initial.elements, values: initial.values, muted: current.muted, control: initial.control,
+            stereoChannels: initial.stereoChannels, balance: initial.balance, channelLayout: initial.channelLayout)
+        return adoptUserLevel(current, token: token) && !unresolvedWrite
     }
 
     /// The caller first latches normal writes at the observed route/sleep boundary.
@@ -506,7 +481,6 @@ final class AudioDuckingRuntime {
     private func relinquish(token: AudioDuckingLease.Token, incomplete: Bool) {
         guard token == lease.token else { return }
         pendingRetainedPercent = nil
-        pendingCurrentVolumePercent = nil
         if pendingWrite != nil {
             pendingWrite = nil
             unresolvedWrite = true
@@ -582,5 +556,25 @@ final class AudioDuckingRuntime {
         beginSnapshot = nil
         effectiveConfiguration = nil
         status = .idle
+    }
+}
+
+/// Presentation evidence captured once per recording, independent of runtime
+/// cleanup. Retain it after Stop so the original level remains inspectable.
+struct AudioDuckingRecordingVolume {
+    private(set) var uid: String?
+    private(set) var values: [Float]?
+
+    mutating func capture(_ snapshot: AudioDuckingOutputSnapshot, inherited: [Float]? = nil) {
+        let original = inherited ?? snapshot.values
+        guard original.count == snapshot.elements.count, !original.isEmpty,
+              original.allSatisfy({ $0.isFinite && (0...1).contains($0) }) else { return }
+        uid = snapshot.uid
+        values = original
+    }
+
+    func percent(forUID uid: String) -> Double? {
+        guard self.uid == uid, let peak = values?.max() else { return nil }
+        return Double(peak) * 100
     }
 }

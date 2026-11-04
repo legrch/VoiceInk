@@ -74,10 +74,6 @@ final class MediaController: ObservableObject {
         currentOutputMuted = reading?.muted == true
     }
 
-    func setCurrentOutputVolume(_ percent: Double) {
-        duckingService?.setCurrentVolumePercent(percent.rounded())
-    }
-
     func updateDuckingLevel(_ percent: Double) {
         duckingService?.updateRetainedPercent(percent)
     }
@@ -85,6 +81,7 @@ final class MediaController: ObservableObject {
     func beginRecordingSession(sessionID: UUID) {
         // Invalidate delayed restoration before the recorder's 220 ms mute delay.
         recordingSessionID = sessionID
+        duckingService?.captureRecordingVolume()
         let desired = duckingSettings.configuration
         if duckingService?.isQuarantined == true {
             // An outstanding HAL effect cannot be cancelled. Do not start a

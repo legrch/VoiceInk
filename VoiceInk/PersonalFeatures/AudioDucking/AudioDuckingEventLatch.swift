@@ -8,6 +8,7 @@ final class AudioDuckingEventLatch {
     private var epoch: UInt64 = 0
     private var token: AudioDuckingLease.Token?
     private var admittedEpoch: UInt64?
+    private var mutePauseEpoch: UInt64?
 
     /// The caller holds its own serialized runtime queue. Events cannot advance
     /// the latch between the epoch check and the durable journal transition.
@@ -26,6 +27,7 @@ final class AudioDuckingEventLatch {
         lock.lock(); defer { lock.unlock() }
         guard epoch == observedEpoch else { return false }
         self.token = token
+        mutePauseEpoch = nil
         admittedEpoch = observedEpoch
         return true
     }
@@ -33,6 +35,29 @@ final class AudioDuckingEventLatch {
     func permits(_ token: AudioDuckingLease.Token) -> Bool {
         lock.lock(); defer { lock.unlock() }
         return self.token == token && admittedEpoch == epoch
+    }
+
+    /// A temporary mute observation cannot reopen a previously invalidated
+    /// lease. Later route/sleep events invalidate this exact resume proof.
+    func pause(ifCurrent expected: AudioDuckingLease.Token) -> UInt64? {
+        lock.lock(); defer { lock.unlock() }
+        guard token == expected, admittedEpoch == epoch || mutePauseEpoch == epoch else { return nil }
+        epoch &+= 1
+        mutePauseEpoch = epoch
+        return epoch
+    }
+
+    func resume(_ expected: AudioDuckingLease.Token, after observedEpoch: UInt64) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard token == expected, epoch == observedEpoch, mutePauseEpoch == observedEpoch else { return false }
+        mutePauseEpoch = nil
+        admittedEpoch = observedEpoch
+        return true
+    }
+
+    func isMutePaused(_ expected: AudioDuckingLease.Token) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return token == expected && mutePauseEpoch == epoch
     }
 
     func pendingInvalidation() -> AudioDuckingLease.Token? {
@@ -44,6 +69,7 @@ final class AudioDuckingEventLatch {
     func invalidate() -> AudioDuckingLease.Token? {
         lock.lock(); defer { lock.unlock() }
         epoch &+= 1
+        mutePauseEpoch = nil
         return token
     }
 
@@ -51,6 +77,7 @@ final class AudioDuckingEventLatch {
         lock.lock(); defer { lock.unlock() }
         guard token == expected else { return false }
         epoch &+= 1
+        mutePauseEpoch = nil
         return true
     }
 
@@ -58,6 +85,7 @@ final class AudioDuckingEventLatch {
         lock.lock(); defer { lock.unlock() }
         guard self.token == token else { return }
         self.token = nil
+        mutePauseEpoch = nil
         admittedEpoch = nil
     }
 }

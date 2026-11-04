@@ -56,25 +56,22 @@ struct AudioSetupView: View {
                     if let original = mediaController.outputRestoreVolumePercent {
                         LabeledContent("Volume Before Recording", value: "\(Int(original.rounded())) %")
                     }
-                    LabeledContent("Current Volume") {
-                        if let percent = mediaController.currentOutputVolumePercent {
-                            Slider(value: Binding(get: { mediaController.currentOutputVolumePercent ?? percent },
-                                                  set: { mediaController.setCurrentOutputVolume($0) }), in: 0...100, step: 1)
-                                .accessibilityLabel("Current output volume")
-                            Text("\(Int(percent.rounded())) %")
-                                .monospacedDigit()
-                                .frame(width: 48, alignment: .trailing)
-                        } else {
-                            Text("Unavailable").foregroundStyle(.secondary)
-                        }
+                    volumeRow("Current Volume") {
+                        Slider(value: .constant(mediaController.currentOutputVolumePercent ?? 0), in: 0...100)
+                            .disabled(true)
+                            .accessibilityLabel("Current volume, read only")
+                        Text(mediaController.currentOutputMuted ? "Muted" : mediaController.currentOutputVolumePercent.map { "\(Int($0.rounded())) %" } ?? "—")
+                            .monospacedDigit()
+                            .frame(width: 55, alignment: .trailing)
                     }
-                    HStack {
-                        Text("Volume During Recording")
+                    volumeRow("Volume During Recording") {
                         Slider(value: deviceRetainedPercent, in: 0...100, step: 1)
+                            .accessibilityLabel("Volume during recording percent")
                         TextField("", value: deviceRetainedPercent, format: .number.precision(.fractionLength(0)))
-                            .frame(width: 55)
+                            .frame(width: 37)
+                            .multilineTextAlignment(.trailing)
                             .accessibilityLabel("Retained volume percent")
-                        Text("%")
+                        Text("%").frame(width: 14)
                     }
                     duckingSeconds("Fade Duration", keyPath: \.fadeDownSeconds)
                     duckingSeconds("Delay Before Restoring", keyPath: \.restoreDelaySeconds)
@@ -110,6 +107,14 @@ struct AudioSetupView: View {
             if !usesPriorityOrder {
                 microphoneSourceBeforePriorityOrder = currentMicrophoneSource
             }
+        }
+    }
+
+    private func volumeRow<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        HStack(spacing: 12) {
+            Text(title).frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 4, content: content)
+                .frame(width: 290)
         }
     }
 

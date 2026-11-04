@@ -837,7 +837,7 @@ let eventBaseline = AudioDuckingOutputSnapshot(deviceID: 1, uid: "one", elements
 let volumeOnlyEvent = AudioDuckingOutputSnapshot(deviceID: 1, uid: "one", elements: [1, 2], values: [0.2, 0.1], muted: false)
 check(!volumeOnlyEvent.requiresInvalidation(comparedWith: eventBaseline), "duplicate mute notification during a volume change preserves the recording")
 let muteEvent = AudioDuckingOutputSnapshot(deviceID: 1, uid: "one", elements: [1, 2], values: [0.2, 0.1], muted: true)
-check(muteEvent.requiresInvalidation(comparedWith: eventBaseline), "an actual mute change still invalidates")
+check(muteEvent.requiresInvalidation(comparedWith: eventBaseline), "an actual mute change requires explicit state reconciliation")
 let deviceEvent = AudioDuckingOutputSnapshot(deviceID: 2, uid: "two", elements: [1, 2], values: [0.2, 0.1], muted: false)
 check(deviceEvent.requiresInvalidation(comparedWith: eventBaseline), "an actual device change still invalidates")
 
@@ -854,64 +854,122 @@ lastMomentRuntime.tick(token: lastMomentToken, now: 4)
 check(lastMomentRuntime.status == .idle && lastMomentOutput.devices[1]!.values == [0.6, 0.3],
       "manual adjustment immediately before Stop restores both original channel levels")
 
-// Current Volume controls the actual level; recording retains its baseline.
-let sliderOutput = makeOutput([0.6, 0.3])
-let sliderRuntime = AudioDuckingRuntime(output: sliderOutput)
-let sliderToken = sliderRuntime.begin(sessionID: UUID(), desired: runtimeConfig)!
-sliderRuntime.activate(token: sliderToken, now: 0)
-sliderRuntime.setCurrentVolumePercent(30, token: sliderToken, now: 0.2)
-check(AudioDuckingOutputSnapshot.levelsMatch(sliderOutput.devices[1]!.values, [0.3, 0.15]) && sliderRuntime.manualAdjustment?.percent == 50,
-      "Current Volume slider sets an absolute level and stores the relative retained percentage")
-check(sliderRuntime.lease.baseline == [0.6, 0.3], "Current Volume never changes the recording baseline")
-sliderRuntime.end(token: sliderToken, now: 1)
-sliderRuntime.tick(token: sliderToken, now: 4)
-check(sliderOutput.devices[1]!.values == [0.6, 0.3] && sliderRuntime.status == .idle,
-      "Current Volume slider adjustment restores the original stereo baseline")
 
-// Standalone volume changes finish at the requested level, not the old volume.
-let directDirectory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("voiceink-direct-volume-\(UUID().uuidString)")
-let directJournal = try AudioDuckingRecoveryJournal(directory: directDirectory)
-let directOutput = makeOutput([0.6, 0.3])
-directOutput.requiresWriteNotification = true
-directOutput.deferWrites = true
-let directRuntime = AudioDuckingRuntime(output: directOutput, journal: directJournal)
-let directToken = directRuntime.begin(sessionID: UUID(), desired: runtimeConfig)!
-directRuntime.setCurrentVolumePercent(40, token: directToken, standalone: true, now: 0)
-if case .record(let entry) = try directJournal.read() {
-    check(AudioDuckingOutputSnapshot.levelsMatch(entry.baseline, [0.4, 0.2]) && entry.phase == .writeIntent,
-          "standalone slider journals the requested completion goal before writing")
-} else { check(false, "standalone slider preserves crash evidence") }
-directRuntime.setCurrentVolumePercent(50, token: directToken, standalone: true, now: 0.01)
-for step in 1...4 {
-    directOutput.deliverPendingWrite()
-    directRuntime.volumeChanged(token: directToken, now: Double(step) * 0.1)
-}
-check(directRuntime.status == .idle && AudioDuckingOutputSnapshot.levelsMatch(directOutput.devices[1]!.values, [0.5, 0.25]),
-      "rapid standalone slider commands serialize all channel writes and finish at the latest user level")
-if case .absent = try directJournal.read() {} else { check(false, "standalone volume completion clears its journal") }
-try FileManager.default.removeItem(at: directDirectory)
-print("AudioDucking user volume and duplicate event checks passed")
+// A confirmed recording tolerates an explicit user mute change without
+// changing mute hardware or forgetting the original volume.
+let muteDirectory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("voiceink-mute-state-\(UUID().uuidString)")
+let muteJournal = try AudioDuckingRecoveryJournal(directory: muteDirectory)
+let muteOutput = makeOutput([0.6, 0.3])
+muteOutput.requiresWriteNotification = true
+let muteRuntime = AudioDuckingRuntime(output: muteOutput, journal: muteJournal)
+let muteToken = muteRuntime.begin(sessionID: UUID(), desired: runtimeConfig)!
+muteRuntime.activate(token: muteToken, now: 0)
+muteRuntime.volumeChanged(token: muteToken, now: 0.1)
+muteRuntime.volumeChanged(token: muteToken, now: 0.2)
+let beforeMuteWrites = muteOutput.writes.count
+muteOutput.devices[1] = AudioDuckingOutputSnapshot(deviceID: 1, uid: "one", elements: [1, 2], values: [0.24, 0.12], muted: true)
+check(muteRuntime.observeMuteChange(token: muteToken), "a user mute change with no pending write retains volume ownership")
+check(muteRuntime.lease.baseline == [0.6, 0.3] && muteOutput.writes.count == beforeMuteWrites,
+      "observing mute neither writes HAL nor replaces the original recording volume")
+muteOutput.devices[1] = AudioDuckingOutputSnapshot(deviceID: 1, uid: "one", elements: [1, 2], values: [0.24, 0.12], muted: false)
+check(muteRuntime.observeMuteChange(token: muteToken), "a later user unmute retains the same baseline")
+muteRuntime.end(token: muteToken, now: 1)
+muteRuntime.tick(token: muteToken, now: 4)
+muteRuntime.volumeChanged(token: muteToken, now: 4.1)
+muteRuntime.volumeChanged(token: muteToken, now: 4.2)
+check(muteRuntime.status == .idle && AudioDuckingOutputSnapshot.levelsMatch(muteOutput.devices[1]!.values, [0.6, 0.3]),
+      "mute and unmute during recording still restore the original stereo volume")
+try FileManager.default.removeItem(at: muteDirectory)
 
-let pendingSliderOutput = makeOutput([0.6])
-pendingSliderOutput.requiresWriteNotification = true
-pendingSliderOutput.deferWrites = true
-let pendingSliderRuntime = AudioDuckingRuntime(output: pendingSliderOutput)
-let pendingSliderToken = pendingSliderRuntime.begin(sessionID: UUID(), desired: runtimeConfig)!
-pendingSliderRuntime.activate(token: pendingSliderToken, now: 0)
-pendingSliderRuntime.setCurrentVolumePercent(30, token: pendingSliderToken, now: 0.01)
-pendingSliderOutput.deliverPendingWrite()
-pendingSliderRuntime.volumeChanged(token: pendingSliderToken, now: 0.1)
-pendingSliderOutput.deliverPendingWrite()
-pendingSliderRuntime.volumeChanged(token: pendingSliderToken, now: 0.2)
-check(pendingSliderRuntime.lease.baseline == [0.6] && pendingSliderRuntime.manualAdjustment?.percent == 50,
-      "a recording slider command waits for the existing fade write without changing baseline")
-pendingSliderRuntime.end(token: pendingSliderToken, now: 1)
-pendingSliderRuntime.tick(token: pendingSliderToken, now: 4)
-pendingSliderOutput.deliverPendingWrite()
-pendingSliderRuntime.volumeChanged(token: pendingSliderToken, now: 4.1)
-check(pendingSliderRuntime.status == .idle && pendingSliderOutput.devices[1]!.values == [0.6],
-      "a slider command queued behind a fade still restores the original volume")
-let retiredWriteCount = pendingSliderOutput.writes.count
-pendingSliderRuntime.setCurrentVolumePercent(10, token: pendingSliderToken, now: 5)
-check(pendingSliderOutput.writes.count == retiredWriteCount, "a stale slider command cannot change a completed recording")
-print("AudioDucking queued volume control checks passed")
+let mutePendingOutput = makeOutput([0.6])
+mutePendingOutput.requiresWriteNotification = true
+mutePendingOutput.deferWrites = true
+let mutePendingRuntime = AudioDuckingRuntime(output: mutePendingOutput)
+let mutePendingToken = mutePendingRuntime.begin(sessionID: UUID(), desired: runtimeConfig)!
+mutePendingRuntime.activate(token: mutePendingToken, now: 0)
+check(mutePendingRuntime.observeMuteChange(token: mutePendingToken), "a duplicate unchanged mute notification does not confirm or discard a pending write")
+check(mutePendingRuntime.hasPendingWrite, "an unchanged mute notification is not a volume acknowledgement")
+mutePendingOutput.devices[1] = AudioDuckingOutputSnapshot(deviceID: 1, uid: "one", elements: [1], values: [0.6], muted: true)
+check(!mutePendingRuntime.observeMuteChange(token: mutePendingToken), "a real mute change cannot resume an unconfirmed write")
+mutePendingRuntime.invalidate(token: mutePendingToken)
+check(mutePendingRuntime.isQuarantined, "a mute change with an in-flight write retains quarantine")
+
+let muteLatch = AudioDuckingEventLatch()
+check(muteLatch.admit(mutePendingToken, observedEpoch: muteLatch.currentEpoch()), "mute latch admits the recording")
+let muteEpoch = muteLatch.pause(ifCurrent: mutePendingToken)!
+check(!muteLatch.permits(mutePendingToken), "mute observation pauses all future normal writes")
+check(muteLatch.resume(mutePendingToken, after: muteEpoch), "only the original unchanged epoch may resume")
+let interruptedMuteEpoch = muteLatch.pause(ifCurrent: mutePendingToken)!
+_ = muteLatch.invalidate()
+check(!muteLatch.resume(mutePendingToken, after: interruptedMuteEpoch), "route or sleep during mute observation cannot be reopened")
+check(muteLatch.pause(ifCurrent: mutePendingToken) == nil, "a later mute event cannot reopen an invalidated route")
+
+var displayedRecording = AudioDuckingRecordingVolume()
+displayedRecording.capture(eventBaseline)
+check(abs(displayedRecording.percent(forUID: "one")! - 60) < 0.0001, "recording display captures the original level")
+check(displayedRecording.values == [0.6, 0.3] && volumeOnlyEvent.values != displayedRecording.values,
+      "a live volume change or runtime invalidation does not mutate the display snapshot")
+check(displayedRecording.percent(forUID: "two") == nil, "a different output never inherits another device's display baseline")
+displayedRecording.capture(volumeOnlyEvent, inherited: [0.6, 0.3])
+check(displayedRecording.values == [0.6, 0.3], "rapid recordings display the inherited original volume, not the reduced readback")
+print("AudioDucking mute continuity and recording display checks passed")
+
+let pausedOutput = makeOutput([0.6])
+pausedOutput.requiresWriteNotification = true
+pausedOutput.deferWrites = true
+let pausedLatch = AudioDuckingEventLatch()
+let pausedRuntime = AudioDuckingRuntime(output: pausedOutput, normalWriteAllowed: { pausedLatch.permits($0) })
+let pausedToken = pausedRuntime.begin(sessionID: UUID(), desired: runtimeConfig)!
+check(pausedLatch.admit(pausedToken, observedEpoch: pausedLatch.currentEpoch()), "admit the pending-write pause fixture")
+pausedRuntime.activate(token: pausedToken, now: 0)
+pausedOutput.deliverPendingWrite()
+let deliveredVolumeObservation = pausedOutput.devices[1]!
+let pausedEpoch = pausedLatch.pause(ifCurrent: pausedToken)!
+check(pausedLatch.isMutePaused(pausedToken), "mute pause is distinguishable from route invalidation")
+let pausedWriteCount = pausedOutput.writes.count
+pausedRuntime.tick(token: pausedToken, now: 0.1)
+check(pausedOutput.writes.count == pausedWriteCount && pausedRuntime.hasPendingWrite, "pause permits neither another write nor invented acknowledgement")
+check(pausedRuntime.observeMuteChange(token: pausedToken), "unchanged mute can resume without acknowledging the pending volume write")
+check(pausedLatch.resume(pausedToken, after: pausedEpoch), "resume exactly the mute observation")
+pausedRuntime.volumeChanged(token: pausedToken, now: 0.2, observed: deliveredVolumeObservation)
+check(!pausedRuntime.hasPendingWrite && !pausedRuntime.isQuarantined, "a real buffered volume notification still acknowledges the write after mute inspection")
+check(!pausedLatch.isMutePaused(pausedToken), "resumption retires the mute-pause marker")
+print("AudioDucking mute pause notification checks passed")
+
+let coalescedMuteLatch = AudioDuckingEventLatch()
+check(coalescedMuteLatch.admit(pausedToken, observedEpoch: coalescedMuteLatch.currentEpoch()), "admit repeated mute fixture")
+let firstMuteEpoch = coalescedMuteLatch.pause(ifCurrent: pausedToken)!
+let latestMuteEpoch = coalescedMuteLatch.pause(ifCurrent: pausedToken)!
+check(!coalescedMuteLatch.resume(pausedToken, after: firstMuteEpoch), "a later mute notification retires the earlier observation proof")
+check(coalescedMuteLatch.resume(pausedToken, after: latestMuteEpoch), "the latest mute observation can resume if no lifecycle event intervened")
+print("AudioDucking repeated mute observation checks passed")
+
+let stopMuteOutput = makeOutput([0.6])
+let stopMuteRuntime = AudioDuckingRuntime(output: stopMuteOutput)
+let stopMuteToken = stopMuteRuntime.begin(sessionID: UUID(), desired: runtimeConfig)!
+stopMuteRuntime.activate(token: stopMuteToken, now: 0)
+stopMuteOutput.devices[1] = AudioDuckingOutputSnapshot(deviceID: 1, uid: "one", elements: [1], values: [0.24], muted: true)
+stopMuteRuntime.end(token: stopMuteToken, now: 1)
+check(stopMuteRuntime.lease.baseline == [0.6] && stopMuteRuntime.capturedOutput?.muted == true,
+      "Stop reconciles a queued mute adjustment without recapturing the reduced volume")
+stopMuteRuntime.tick(token: stopMuteToken, now: 4)
+check(stopMuteRuntime.status == .idle && stopMuteOutput.devices[1]!.values == [0.6] && stopMuteOutput.devices[1]!.muted == true,
+      "Stop restores the saved volume without overriding the user's mute choice")
+print("AudioDucking queued mute at Stop checks passed")
+
+let pausedStopOutput = makeOutput([0.6])
+pausedStopOutput.requiresWriteNotification = true
+pausedStopOutput.deferWrites = true
+let pausedStopRuntime = AudioDuckingRuntime(output: pausedStopOutput)
+let pausedStopToken = pausedStopRuntime.begin(sessionID: UUID(), desired: runtimeConfig)!
+pausedStopRuntime.activate(token: pausedStopToken, now: 0)
+pausedStopOutput.deliverPendingWrite()
+let stoppedObservation = pausedStopOutput.devices[1]!
+pausedStopRuntime.end(token: pausedStopToken, now: 0.1)
+pausedStopRuntime.volumeChanged(token: pausedStopToken, now: 0.2, observed: stoppedObservation)
+pausedStopRuntime.tick(token: pausedStopToken, now: 4)
+pausedStopOutput.deliverPendingWrite()
+pausedStopRuntime.volumeChanged(token: pausedStopToken, now: 4.1)
+check(pausedStopRuntime.status == .idle && pausedStopOutput.devices[1]!.values == [0.6],
+      "Stop before the buffered acknowledgement still restores the original volume")
+print("AudioDucking Stop before buffered notification checks passed")

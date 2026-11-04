@@ -13,6 +13,11 @@ final class AudioDuckingService {
     private var runtime: AudioDuckingRuntime!
     private var journal: AudioDuckingRecoveryJournal?
     private var recovery: AudioDuckingRecoveryCoordinator?
+    private var recordingVolume = AudioDuckingRecordingVolume()
+    private var deferredVolumeObservation: (AudioDuckingLease.Token, AudioDuckingOutputSnapshot)?
+    private var deferredStop: AudioDuckingLease.Token?
+    private var deferredActivation: AudioDuckingLease.Token?
+    private var deferredRetainedLevel: (AudioDuckingLease.Token, Double)?
     private var recoveryBlocked = false
     private var recoveryContinuityLost = false
     private let recoveryLatch = AudioDuckingEventLatch()
@@ -87,8 +92,9 @@ final class AudioDuckingService {
         queue.sync {
             guard let snapshot = AudioDuckingCoreAudio().readDefault(), let peak = snapshot.values.max() else { return nil }
             let saved = (try? journal?.pendingIntent(for: snapshot.uid))?.1.baseline.max()
-            let original = runtime.lease.baseline?.max() ?? runtime.capturedOutput?.values.max() ?? saved ?? peak
-            return (Double(peak) * 100, snapshot.muted, Double(original) * 100)
+            let fallback = runtime.lease.baseline?.max() ?? saved ?? peak
+            let original = recordingVolume.percent(forUID: snapshot.uid) ?? Double(fallback) * 100
+            return (Double(peak) * 100, snapshot.muted, original)
         }
     }
 
@@ -238,7 +244,9 @@ final class AudioDuckingService {
 
     func activate(token: AudioDuckingLease.Token) {
         queue.async { [weak self] in
-            guard let self, self.latch.permits(token) else { return }
+            guard let self else { return }
+            if self.latch.isMutePaused(token) { self.deferredActivation = token; return }
+            guard self.latch.permits(token) else { return }
             self.runtime.activate(token: token, now: ProcessInfo.processInfo.systemUptime)
             self.publishStatus(self.runtime.status)
             self.schedule(token: token)
@@ -247,7 +255,9 @@ final class AudioDuckingService {
 
     func end(token: AudioDuckingLease.Token) {
         queue.async { [weak self] in
-            guard let self, self.latch.permits(token) else { return }
+            guard let self else { return }
+            if self.latch.isMutePaused(token) { self.deferredStop = token; return }
+            guard self.latch.permits(token) else { return }
             self.runtime.end(token: token, now: ProcessInfo.processInfo.systemUptime)
             self.publishStatus(self.runtime.status)
             self.schedule(token: token)
@@ -256,36 +266,65 @@ final class AudioDuckingService {
 
     func updateRetainedPercent(_ percent: Double) {
         queue.async { [weak self] in
-            guard let self, let token = self.runtime.lease.token, self.latch.permits(token) else { return }
+            guard let self, let token = self.runtime.lease.token else { return }
+            if self.latch.isMutePaused(token) { self.deferredRetainedLevel = (token, percent); return }
+            guard self.latch.permits(token) else { return }
             self.runtime.updateRetainedPercent(percent, token: token, now: ProcessInfo.processInfo.systemUptime)
             self.publishStatus(self.runtime.status)
             self.schedule(token: token)
         }
     }
 
-    /// Explicit slider input also replaces the old recovery acknowledgement UI.
-    /// Archives evidence without a HAL write before accepting a new user command.
-    func setCurrentVolumePercent(_ percent: Double) {
-        guard percent.isFinite, (0...100).contains(percent) else { return }
-        if isQuarantined || canAcknowledgeRecovery {
-            guard acknowledgeRecovery() else { return }
+    func captureRecordingVolume() {
+        queue.sync {
+            guard let snapshot = AudioDuckingCoreAudio().readDefault() else { return }
+            let inherited = runtime.capturedOutput.map { $0.hasSameControls(as: snapshot) } == true ? runtime.lease.baseline : nil
+            recordingVolume.capture(snapshot, inherited: inherited)
         }
-        let standalone = queue.sync { runtime.standaloneVolumeAdjustment || runtime.status != .active }
-        var token = queue.sync { runtime.lease.token }
-        if standalone && !queue.sync(execute: { runtime.standaloneVolumeAdjustment }) {
-            var config = AudioDuckingConfiguration(mode: .duck)
-            config.fadeDownSeconds = 0
-            config.fadeUpSeconds = 0
-            config.restoreDelaySeconds = 0
-            token = begin(sessionID: UUID(), desired: config)
-        }
-        guard let token else { return }
+    }
+
+    /// Pause before entering the serialized queue. Resume only this mute
+    /// observation; route/sleep events advance the epoch and cannot be undone.
+    private func muteEventOccurred(token: AudioDuckingLease.Token) {
+        guard let epoch = latch.pause(ifCurrent: token) else { return }
         queue.async { [weak self] in
-            guard let self, self.latch.permits(token) else { return }
-            self.runtime.setCurrentVolumePercent(percent, token: token, standalone: standalone,
-                                                  now: ProcessInfo.processInfo.systemUptime)
+            guard let self, self.latch.currentEpoch() == epoch, self.runtime.lease.token == token else { return }
+            guard self.runtime.observeMuteChange(token: token) else {
+                self.logger.warning("Mute change could not retain ownership; pending=\(self.runtime.hasPendingWrite, privacy: .public)")
+                self.enqueueInvalidation(token)
+                return
+            }
+            guard self.latch.resume(token, after: epoch) else { return }
+            // Stop is never dropped by a temporary pause and wins over delayed
+            // activation/settings. Apply it before acknowledgements can advance
+            // another fade-down write.
+            let stopped = self.deferredStop == token
+            var needsSchedule = stopped
+            if stopped {
+                self.deferredStop = nil
+                self.deferredActivation = nil
+                self.deferredRetainedLevel = nil
+                self.runtime.end(token: token, now: ProcessInfo.processInfo.systemUptime)
+            } else {
+                if self.deferredActivation == token {
+                    self.deferredActivation = nil
+                    self.runtime.activate(token: token, now: ProcessInfo.processInfo.systemUptime)
+                    needsSchedule = true
+                }
+                if let (levelToken, percent) = self.deferredRetainedLevel, levelToken == token {
+                    self.deferredRetainedLevel = nil
+                    self.runtime.updateRetainedPercent(percent, token: token, now: ProcessInfo.processInfo.systemUptime)
+                    needsSchedule = true
+                }
+            }
+            // Preserve a real volume notification delivered during this pause;
+            // a mute notification alone never acknowledges an own volume write.
+            if let (observedToken, observed) = self.deferredVolumeObservation, observedToken == token {
+                self.deferredVolumeObservation = nil
+                self.runtime.volumeChanged(token: token, now: ProcessInfo.processInfo.systemUptime, observed: observed)
+            }
             self.publishStatus(self.runtime.status)
-            self.schedule(token: token)
+            if needsSchedule { self.schedule(token: token) }
         }
     }
 
@@ -305,6 +344,10 @@ final class AudioDuckingService {
     }
 
     private func removeDeviceListeners() {
+        deferredVolumeObservation = nil
+        deferredStop = nil
+        deferredActivation = nil
+        deferredRetainedLevel = nil
         for (device, var address, callback) in deviceListeners {
             AudioObjectRemovePropertyListenerBlock(device, &address, notificationQueue, callback)
         }
@@ -323,14 +366,10 @@ final class AudioDuckingService {
             var address = AudioObjectPropertyAddress(mSelector: selector, mScope: scope, mElement: 0)
             guard AudioObjectHasProperty(device, &address) else { continue }
             let callback: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-                // Only mute produces harmless duplicate notifications during
-                // ordinary volume adjustments. Lifecycle events still latch
-                // immediately, even if their readback happens to look unchanged.
-                guard selector == kAudioDevicePropertyMute,
-                      let current = AudioDuckingCoreAudio().readDefault(),
-                      !current.requiresInvalidation(comparedWith: snapshot) else {
+                if selector == kAudioDevicePropertyMute {
+                    self?.muteEventOccurred(token: token)
+                } else {
                     self?.deviceEventOccurred(token: token, reason: "device property \(selector)")
-                    return
                 }
             }
             guard AudioObjectAddPropertyListenerBlock(device, &address, notificationQueue, callback) == noErr else {
@@ -376,7 +415,12 @@ final class AudioDuckingService {
                 return
             }
             self?.queue.async { [weak self] in
-                guard let self, self.latch.permits(token) else { return }
+                guard let self else { return }
+                if self.latch.isMutePaused(token) {
+                    self.deferredVolumeObservation = (token, observed)
+                    return
+                }
+                guard self.latch.permits(token) else { return }
                 self.runtime.volumeChanged(token: token, now: ProcessInfo.processInfo.systemUptime, observed: observed)
                 self.publishStatus(self.runtime.status)
             }
