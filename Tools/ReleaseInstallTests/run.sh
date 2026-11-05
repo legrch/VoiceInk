@@ -21,7 +21,7 @@ fi
 install_fixture --version latest --archive "$archive" --destination "$target"
 codesign --verify --deep --strict "$target"
 original=$(shasum -a 256 "$target/Contents/MacOS/VoiceInk" | awk '{print $1}')
-install_fixture --version personal-2.25.1 --archive "$archive" --destination "$target"
+install_fixture --version plus-v2.25-r1 --archive "$archive" --destination "$target"
 [[ $(find "$test_root/target/VoiceInk-Personal-Backups" -name VoiceInk.app -type d | wc -l | tr -d ' ') == 1 ]]
 if bash -c '
   source "$1"
@@ -58,7 +58,7 @@ fi
 rmdir "$test_root/target/.voiceink-personal-install.lock"
 echo 'PASS: simulated process checks, real signed first install, update, backup, injected failure rollback, corrupt archive and lock refusal; no app launched.'
 
-for rejected_args in '--version unknown' '--version' '--version latest --version personal-2.25.1'; do
+for rejected_args in '--version unknown' '--version' '--version latest --version plus-v2.25-r1'; do
     if bash -c 'source "$1"; shift; main "$@"' bash "$installer" $rejected_args --archive "$archive" --destination "$target"; then
         echo 'FAIL: invalid version request accepted' >&2; exit 1
     fi

@@ -1,14 +1,14 @@
 # Fork releases and upstream updates
 
-Status: owner-approved convention, recorded 2026-11-05. The Plus naming scheme is for future releases; its build metadata and installer support are not implemented yet.
+Status: owner-approved convention. The Plus metadata, About panel and installer support were implemented for `plus-v2.25-r1` (upstream 2.25, revision 1, build 1001). Automatic updates remain disabled.
 
 ## Published baseline
 
 - Keep the published `personal-2.25.1` tag and assets unchanged. Its application reports upstream version `2.25`, build `225`.
-- The current installer still selects `personal-2.25.1`. Recording a future tag convention does not change `latest` or enable automatic updates.
+- `latest` selects `plus-v2.25-r1`; the bootstrap retains a separate immutable installer pin for exact `personal-2.25.1` requests.
 - The public install/update command remains the one at the top of [README](../README.md).
 
-## Future VoiceInk Plus versions
+## VoiceInk Plus versions
 
 Keep the full upstream version and our release revision separate. Do not reserve upstream's third version component for fork changes.
 
@@ -20,20 +20,24 @@ Keep the full upstream version and our release revision separate. Do not reserve
 | 2.26 | 1 | VoiceInk Plus 2.26 · r1 | `plus-v2.26-r1` | 1004 |
 
 - Preserve the upstream version exactly as provenance, including any patch component. Increment `rN` for each published Plus release on that base; start at `r1` when the upstream version changes.
-- Use an independent, strictly increasing numeric `CFBundleVersion`. Choose its initial value above the installed and published builds; 1001 is an example, not an allocated build. Never reset this counter on a new upstream base or derive update order from `rN` alone.
+- Use an independent, strictly increasing numeric `CFBundleVersion`. Choose its initial value above the installed and published builds. The first Plus release allocates build 1001; choose a higher build for every later published release. Never reset this counter on a new upstream base or derive update order from `rN` alone.
 - Tags are human-readable Git identifiers, not strict SemVer or an updater comparison algorithm. SemVer `+metadata` does not determine precedence. A future own updater must use a qualified numeric build ordering.
 - Keep repository `legrch/VoiceInk`, bundle identifier, signing identity and `/Applications/VoiceInk.app`. Label Plus as an independent fork, separate from upstream's Pro product.
 
-## First Plus release prerequisite
+## Preparing a Plus release
 
-Implement and verify the metadata layer before publishing the first Plus artifact:
+`release/plus.json` is the release identity source: exact upstream version/commit, fork revision and independent build. The main app's version and Plus keys in `VoiceInk/Info.plist` are generated from it; helper targets keep their own version/build. About and diagnostics read those signed bundle keys. Keep the application filename, bundle ID, signing certificate and installation path unchanged.
 
-1. Keep upstream version/commit, Plus revision and numeric build in one release metadata source; derive package names and tags from it.
-2. Show upstream version and Plus revision separately in About/diagnostics. Apply build metadata to the main app only; do not globally override XPC or test-target versions.
-3. Extend the installer version whitelist and payload pins for the new release. Update immutable installer/checksum and archive/certificate checks consistently; preserve the legacy exact-version installation path.
-4. Publish a new immutable artifact after the normal checks and source review. Never relabel or overwrite the old release's app bytes to implement branding.
+1. Edit `release/plus.json`, incrementing the numeric build for every published release, then run `python3 scripts/plus-release.py sync-info` and `Tools/PlusReleaseTests/run.sh`.
+2. Run audio checks and a signed Release build with `LOCAL_BUILD` and `LocalBuild.xcconfig`. `scripts/personal-build.sh` validates metadata before and after building, without installation. For an established reusable DerivedData lane, keep the same arguments and call `python3 scripts/plus-release.py check --app /path/VoiceInk.app` after build.
+3. Package once into a fresh directory: `python3 scripts/plus-release.py package --app /path/VoiceInk.app --output /private/tmp/plus-assets`. It derives the tag/asset name, checks the bundle/signature and includes GPL/source pointers. It refuses to overwrite an archive.
+4. Run `python3 scripts/plus-release.py pin-installer --archive /private/tmp/plus-assets/VoiceInk-Plus-2.25-r1-AppleSilicon.zip`. Commit the installer and app changes, then run `python3 scripts/plus-release.py pin-bootstrap --commit FULL_INSTALLER_COMMIT` and commit the bootstrap. The immutable installer pins archive bytes; the bootstrap pins installer bytes and retains the legacy exact-version route.
+5. Run audio/metadata/bootstrap tests, real signed archive install/update/rollback fixtures and a composed build. Freeze the complete candidate, close the risk-selected review and merge through a reviewed merge commit with required checks green.
+6. Copy the committed `scripts/install.sh` into the release assets as `install.sh`; generate `SHA256SUMS` for it and the app archive. Publish the derived tag/title on the accepted source; keep old tags/assets immutable. Verify downloaded assets and the public one-command bootstrap in an isolated destination before announcing availability. App identity changes require a fresh signed build and new archive/pins.
 
-The existing upstream `scripts/release.sh` assumes `v$SHORT_VERSION` and generates Sparkle metadata. It is not a ready Plus release path. The existing source build helper does not implement the proposed metadata layer either.
+The installer validates archive hash, app signature/certificate, bundle ID, upstream version, build, Plus tag and updater isolation before replacement. It does not configure accounts, grant permissions, launch the app or install audio drivers. New-release alerts use GitHub's Releases watch subscription; the in-app link opens the public latest-release page.
+
+The existing upstream `scripts/release.sh` assumes `v$SHORT_VERSION` and generates Sparkle metadata. Do not use it for Plus releases.
 
 ## Upstream integration
 

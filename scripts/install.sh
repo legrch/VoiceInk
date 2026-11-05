@@ -1,9 +1,11 @@
 #!/bin/bash
-# Install the pinned personal release. Never launch the app or change Gatekeeper.
+# Install the pinned VoiceInk Plus release. Never launch the app or change Gatekeeper.
 set -euo pipefail
-VERSION=personal-2.25.1
-ASSET=VoiceInk-Personal-2.25.1-AppleSilicon.zip
-ARCHIVE_SHA256=0157252ebae23b12b9b13b84f9fcc188a15bae1fab61ff171cdf30abdbdf4cda
+VERSION=plus-v2.25-r1
+UPSTREAM_VERSION=2.25
+BUILD_NUMBER=1001
+ASSET=VoiceInk-Plus-2.25-r1-AppleSilicon.zip
+ARCHIVE_SHA256=b4bcb2ddaf6e935e6107031991a8faae68a9aa79f6225727e12344f3b63d824d
 CERT_SHA256=fbb0182020b4091415f9ee73f17b156010daac2291f3f700a85ba4c5d7dbdb89
 BUNDLE_ID=com.prakashjoshipax.VoiceInk
 
@@ -30,12 +32,12 @@ main() {
                 [[ $# -ge 2 && "${2:-}" != --* && "$version_seen" == false ]] || die 'Specify --version once, with a value.'
                 requested_version=$2; version_seen=true; shift 2 ;;
             --replace-existing) replace=true; shift ;;
-            --help) echo 'Usage: bash install.sh [--version latest|personal-2.25.1] [--replace-existing] [--archive /path/release.zip] [--destination /path/VoiceInk.app]'; return ;;
+            --help) echo 'Usage: bash install.sh [--version latest|plus-v2.25-r1] [--replace-existing] [--archive /path/release.zip] [--destination /path/VoiceInk.app]'; return ;;
             *) die "Unknown argument: $1" ;;
         esac
     done
     [[ "$requested_version" == latest || "$requested_version" == "$VERSION" ]] || die "Unsupported version: $requested_version. Use the installer from the desired release."
-    echo "Selected VoiceInk Personal $VERSION (requested: $requested_version)."
+    echo "Selected VoiceInk Plus $VERSION (requested: $requested_version)."
     [[ $(uname -s) == Darwin && $(uname -m) == arm64 ]] || die 'Requires an Apple Silicon Mac.'
     [[ $(sw_vers -productVersion | cut -d. -f1) -ge 15 ]] || die 'Requires macOS 15 or newer.'
     [[ "$destination" == /*/VoiceInk.app && "$destination" != *$'
@@ -83,10 +85,13 @@ main() {
     [[ -f "$archive" ]] || die 'Archive not found.'
     [[ $(shasum -a 256 "$archive" | awk '{print $1}') == "$ARCHIVE_SHA256" ]] || die 'Archive checksum mismatch; nothing installed.'
     ditto -x -k "$archive" "$work/unpacked"
-    local candidate="$work/unpacked/VoiceInk-Personal/VoiceInk.app"
+    local candidate="$work/unpacked/VoiceInk-Plus/VoiceInk.app"
     [[ -d "$candidate" && ! -L "$candidate" ]] || die 'Expected application missing from archive.'
     codesign --verify --deep --strict "$candidate"
     [[ $(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$candidate/Contents/Info.plist") == "$BUNDLE_ID" ]] || die 'Unexpected bundle identifier.'
+    [[ $(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$candidate/Contents/Info.plist") == "$UPSTREAM_VERSION" ]] || die 'Unexpected upstream version.'
+    [[ $(/usr/libexec/PlistBuddy -c 'Print CFBundleVersion' "$candidate/Contents/Info.plist") == "$BUILD_NUMBER" ]] || die 'Unexpected Plus build.'
+    [[ $(/usr/libexec/PlistBuddy -c 'Print VoiceInkPlusTag' "$candidate/Contents/Info.plist") == "$VERSION" ]] || die 'Unexpected Plus release tag.'
     codesign -d --extract-certificates="$work/new-cert" "$candidate" >/dev/null 2>&1
     [[ $(shasum -a 256 "$work/new-cert0" | awk '{print $1}') == "$CERT_SHA256" ]] || die 'Unexpected signing certificate.'
     if /usr/libexec/PlistBuddy -c 'Print SUFeedURL' "$candidate/Contents/Info.plist" >/dev/null 2>&1; then

@@ -43,6 +43,16 @@ final class AudioDuckingEventLatch {
         return true
     }
 
+    /// A healthy pending write may finish for an older recording. Transfer its
+    /// event lease without advancing or recapturing the epoch. Invalidation and
+    /// a temporary mute pause both deny the transfer until safely reconciled.
+    func handoff(from previous: AudioDuckingLease.Token, to next: AudioDuckingLease.Token) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard token == previous, admittedEpoch == epoch else { return false }
+        token = next
+        return true
+    }
+
     func permits(_ token: AudioDuckingLease.Token) -> Bool {
         lock.lock(); defer { lock.unlock() }
         return self.token == token && admittedEpoch == epoch

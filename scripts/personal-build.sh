@@ -4,6 +4,7 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 identity=${VOICEINK_SIGNING_IDENTITY:-VoiceInk Local}
 derived=$(mktemp -d /private/tmp/voiceink-personal-build.XXXXXX)
+python3 scripts/plus-release.py check
 Tools/AudioDuckingTests/run.sh
 # Preserve the Xcode variable for the build system.
 # shellcheck disable=SC2016
@@ -15,6 +16,7 @@ xcodebuild -project VoiceInk.xcodeproj -scheme VoiceInk -configuration Release \
     -skipPackagePluginValidation -skipMacroValidation build
 app="$derived/Build/Products/Release/VoiceInk.app"
 codesign --verify --deep --strict "$app"
+python3 scripts/plus-release.py check --app "$app"
 [[ $(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$app/Contents/Info.plist") == com.prakashjoshipax.VoiceInk ]]
 if /usr/libexec/PlistBuddy -c 'Print SUFeedURL' "$app/Contents/Info.plist" >/dev/null 2>&1; then
     echo 'Upstream Sparkle feed must be absent.' >&2; exit 1

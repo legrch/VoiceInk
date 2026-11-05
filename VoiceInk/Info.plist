@@ -46,5 +46,17 @@
 			</array>
 		</dict>
 	</array>
+	<key>CFBundleShortVersionString</key>
+	<string>2.25</string>
+	<key>CFBundleVersion</key>
+	<string>1001</string>
+	<key>VoiceInkPlusProduct</key>
+	<string>VoiceInk Plus</string>
+	<key>VoiceInkPlusRevision</key>
+	<string>1</string>
+	<key>VoiceInkPlusTag</key>
+	<string>plus-v2.25-r1</string>
+	<key>VoiceInkUpstreamCommit</key>
+	<string>228f4217445f49b667a16e91cc59a1bb1c83ad23</string>
 </dict>
 </plist>

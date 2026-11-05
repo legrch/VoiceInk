@@ -81,6 +81,7 @@ final class SystemInfoService {
     }
 
     private func getAppVersion() -> String {
+        if let release = PlusReleaseMetadata.current { return "\(PlusReleaseMetadata.product) \(release.displayVersion) [\(release.tag)]" }
         return Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown"
     }
 

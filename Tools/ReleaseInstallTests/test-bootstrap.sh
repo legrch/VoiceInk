@@ -2,10 +2,20 @@
 # Exercise bootstrap parsing, verified handoff and cleanup without installation.
 set -euo pipefail
 root=$(cd "$(dirname "$0")/../.." && pwd)
-bootstrap="$root/scripts/install-release.sh"
+bootstrap=${VOICEINK_BOOTSTRAP_TEST_SCRIPT:-"$root/scripts/install-release.sh"}
 payload="$root/scripts/install.sh"
 fixture=$(mktemp -d /private/tmp/voiceink-bootstrap-tests.XXXXXXXX)
 trap 'rm -rf "$fixture"' EXIT
+# Historical exact-version installs retain the immutable legacy payload.
+export BOOTSTRAP_LEGACY_PAYLOAD="$fixture/legacy-install.sh"
+git -C "$root" show 7852619a59ba84f34e386019c55eaf8fa1ba5eeb:scripts/install.sh > "$BOOTSTRAP_LEGACY_PAYLOAD"
+# Test the actual immutable Plus payload named by this bootstrap, including
+# coherent intermediate commits before a newer installer pin is promoted.
+pinned_commit=$(sed -n 's@.*plus_installer_url=https://raw.githubusercontent.com/legrch/VoiceInk/\([a-f0-9]*\)/scripts/install.sh@\1@p' "$bootstrap")
+if [[ -n "$pinned_commit" ]]; then
+    payload="$fixture/pinned-install.sh"
+    git -C "$root" show "$pinned_commit:scripts/install.sh" > "$payload"
+fi
 cat > "$fixture/runner.sh" <<'RUNNER'
 #!/bin/bash
 source "$1"
@@ -16,6 +26,7 @@ shift 4
 mktemp() { command mktemp "$@" | tee "$result/work"; }
 curl() {
     printf '%s\n' "$@" > "$result/download"
+    download_args="$*"
     output=''
     while [[ $# -gt 0 ]]; do
         if [[ "$1" == -o ]]; then output=$2; shift 2; else shift; fi
@@ -24,7 +35,10 @@ curl() {
     case "$mode" in
         download-failure) return 22 ;;
         corrupt) printf 'not the verified installer' > "$output" ;;
-        *) cp "$payload" "$output" ;;
+        *)
+            if [[ "$download_args" == *7852619a59ba84f34e386019c55eaf8fa1ba5eeb* ]]; then
+                cp "$BOOTSTRAP_LEGACY_PAYLOAD" "$output"
+            else cp "$payload" "$output"; fi ;;
     esac
 }
 bash() {
@@ -52,6 +66,13 @@ sed -n '2,6p' "$fixture/explicit/invocation" > "$fixture/actual"
 printf '%s\n' --version personal-2.25.1 --replace-existing --destination "$fixture/a directory/VoiceInk.app" > "$fixture/expected"
 cmp "$fixture/actual" "$fixture/expected"
 assert_cleaned explicit
+run_case good plus plus-v2.25-r1
+sed -n '2,6p' "$fixture/plus/invocation" > "$fixture/actual"
+printf '%s\n' --version plus-v2.25-r1 --replace-existing --destination /Applications/VoiceInk.app > "$fixture/expected"
+cmp "$fixture/actual" "$fixture/expected"
+assert_cleaned plus
+rg -q '7852619a59ba84f34e386019c55eaf8fa1ba5eeb' "$fixture/explicit/download"
+! rg -q '7852619a59ba84f34e386019c55eaf8fa1ba5eeb' "$fixture/plus/download"
 for mode in download-failure corrupt payload-failure; do
     expected=1
     [[ "$mode" != download-failure ]] || expected=22
