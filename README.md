@@ -21,9 +21,9 @@ For either first installation or replacement, quit VoiceInk and copy the whole b
 ```bash
 voiceink_installer=$(mktemp /tmp/voiceink-personal-install.XXXXXXXX)
 curl --fail --location --proto '=https' --proto-redir '=https' \
-  https://raw.githubusercontent.com/legrch/VoiceInk/44f81762c07806efa5de65fc63087054f1246b24/scripts/install.sh \
+  https://raw.githubusercontent.com/legrch/VoiceInk/7852619a59ba84f34e386019c55eaf8fa1ba5eeb/scripts/install.sh \
   -o "$voiceink_installer" &&
-printf '84d958e89138564c783cf95b358704e13857bbbdac54162f1ae3cb5e45eb0b42  %s\n' "$voiceink_installer" | shasum -a 256 -c - &&
+printf '79c58536608561c4b0c22a99f93f1a65e87aace155837b6287cca394556a2751  %s\n' "$voiceink_installer" | shasum -a 256 -c - &&
 bash "$voiceink_installer" --version latest --replace-existing
 ```
 
@@ -47,7 +47,7 @@ If ducking pauses after an interruption, first set a comfortable system volume, 
 
 This fork retains these known upstream behaviors: vocabulary correction applies when terms are configured even if an older opt-out preference exists; website modes match host/path and query- or fragment-specific rules may need adjustment; after importing older Soniox modes, restart before using or editing them; very large Auto-Learn AI-review backlogs can stall and may require manual dictionary review. These optional-feature limits do not change the personal audio-ducking settings.
 
-Canceling a batch transcription can leave recording temporarily unavailable until the provider request finishes or times out. The recording guard retains shared cleanup ownership during that drain.
+Canceling a batch transcription can leave recording temporarily unavailable until the provider request finishes or times out. The recording guard retains shared cleanup ownership during that drain. Import audio settings while idle after volume has returned; an import during recording can display the new retained level before the runtime adopts it.
 
 ## Fork development
 
