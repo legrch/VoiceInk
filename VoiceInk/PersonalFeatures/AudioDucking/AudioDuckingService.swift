@@ -91,7 +91,7 @@ final class AudioDuckingService {
     var currentVolumeReading: (percent: Double, muted: Bool?, restorePercent: Double)? {
         queue.sync {
             guard let snapshot = AudioDuckingCoreAudio().readDefault(), let peak = snapshot.values.max() else { return nil }
-            let saved = (try? journal?.pendingIntent(for: snapshot.uid))?.1.baseline.max()
+            let saved = (try? journal?.pendingRecovery(for: snapshot.uid))?.1.baseline.max()
             let fallback = runtime.lease.baseline?.max() ?? saved ?? peak
             let original = recordingVolume.percent(forUID: snapshot.uid) ?? Double(fallback) * 100
             return (Double(peak) * 100, snapshot.muted, original)
@@ -103,13 +103,13 @@ final class AudioDuckingService {
             guard recoveryToken == nil, !runtime.hasPendingWrite,
                   runtime.status != .active, runtime.status != .restoring,
                   let journal, let snapshot = AudioDuckingCoreAudio().readDefault(), snapshot.muted != nil else { return false }
-            return (try? journal.pendingIntent(for: snapshot.uid)) != nil
+            return (try? journal.pendingRecovery(for: snapshot.uid)) != nil
         }
     }
 
-    /// Owner acknowledgment archives only the pending intent of the currently
-    /// connected output; it never writes an audio control or restores baseline.
-    func acknowledgeRecovery() -> Bool {
+    /// Explicit reset archives unresolved records of the connected output.
+    /// It never writes volume, restores baseline or confirms a previous setter.
+    func acknowledgeRecovery(reason: AudioDuckingRecoveryJournal.AcknowledgmentReason = .userSetVolume) -> Bool {
         queue.sync {
             guard recoveryToken == nil, !runtime.hasPendingWrite,
                   runtime.status != .active, runtime.status != .restoring, let journal else { return false }
@@ -119,8 +119,8 @@ final class AudioDuckingService {
             do {
                 var accepted = false
                 for _ in 0..<64 {
-                    guard try journal.pendingIntent(for: snapshot.uid) != nil else { break }
-                    guard try journal.acknowledge(uid: snapshot.uid, observed: snapshot, now: Date(), commit: { operation in
+                    guard try journal.pendingRecovery(for: snapshot.uid) != nil else { break }
+                    guard try journal.acknowledge(uid: snapshot.uid, observed: snapshot, now: Date(), reason: reason, commit: { operation in
                         guard let current = output.readDefault(), current.hasSameControls(as: snapshot),
                               current.muted == snapshot.muted,
                               AudioDuckingOutputSnapshot.levelsMatch(current.values, snapshot.values) else { return false }
@@ -132,7 +132,7 @@ final class AudioDuckingService {
                     }) else { return false }
                     accepted = true
                 }
-                guard accepted, try journal.pendingIntent(for: snapshot.uid) == nil else { return false }
+                guard accepted, try journal.pendingRecovery(for: snapshot.uid) == nil else { return false }
                 timer?.cancel(); timer = nil
                 recoveryTimer?.cancel(); recoveryTimer = nil
                 if let token = runtime.lease.token { _ = latch.invalidate(ifCurrent: token); latch.clear(token) }

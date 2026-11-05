@@ -230,17 +230,23 @@ final class AudioDuckingRecoveryJournal {
         let observedMute: Bool?
     }
 
-    /// Only a pending intent for the selected UID can be acknowledged. The
-    /// archived receipt is durable before the blocking record is removed.
-    func pendingIntent(for uid: String) throws -> (URL, AudioDuckingRecoveryRecord)? {
+    enum AcknowledgmentReason: String {
+        case userSetVolume = "user_set_volume"
+        case userReenabledDucking = "user_reenabled_ducking"
+    }
+
+    /// An unresolved record for the selected UID can be explicitly acknowledged.
+    /// The original phase is retained; acknowledgment is not write confirmation.
+    /// The archive is durable before the blocking record is removed.
+    func pendingRecovery(for uid: String) throws -> (URL, AudioDuckingRecoveryRecord)? {
         switch try read() {
         case .invalid: throw JournalError.invalidRecord
         case .record(let record):
-            if record.deviceUID == uid && record.phase == .writeIntent { return (recordURL, record) }
+            if record.deviceUID == uid && record.phase != .restored { return (recordURL, record) }
         case .absent: break
         }
         for prefix in ["held-", "acknowledged-"] {
-            if let entry = try archivedRecords(prefix: prefix).first(where: { $0.1.deviceUID == uid && $0.1.phase == .writeIntent }) {
+            if let entry = try archivedRecords(prefix: prefix).first(where: { $0.1.deviceUID == uid && $0.1.phase != .restored }) {
                 return entry
             }
         }
@@ -248,14 +254,15 @@ final class AudioDuckingRecoveryJournal {
     }
 
     func acknowledge(uid: String, observed: AudioDuckingOutputSnapshot, now: Date,
+                     reason: AcknowledgmentReason = .userSetVolume,
                      commit: (() throws -> Void) throws -> Bool) throws -> Bool {
         guard uid == observed.uid, observed.muted != nil, now.timeIntervalSince1970.isFinite,
               !observed.values.isEmpty, observed.values.count == observed.elements.count,
               observed.values.allSatisfy({ $0.isFinite && (0...1).contains($0) }),
-              let (source, record) = try pendingIntent(for: uid),
-              record.deviceUID == uid, record.phase == .writeIntent else { return false }
+              let (source, record) = try pendingRecovery(for: uid),
+              record.deviceUID == uid, record.phase != .restored else { return false }
         let receiptURL = directory.appendingPathComponent("accepted-\(record.cycleID.uuidString).json")
-        let receipt = Acknowledgment(record: record, reason: "user_set_volume", acknowledgedAt: now,
+        let receipt = Acknowledgment(record: record, reason: reason.rawValue, acknowledgedAt: now,
             observedUID: observed.uid, observedValues: observed.values, observedMute: observed.muted)
         if FileManager.default.fileExists(atPath: receiptURL.path) {
             guard let bytes = try? Data(contentsOf: receiptURL), bytes.count <= 65_536,

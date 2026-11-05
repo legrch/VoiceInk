@@ -129,7 +129,7 @@ try multipleJournal.write(earlierIntent)
 try multipleJournal.holdMissingDevice(earlierIntent)
 try multipleJournal.write(laterIntent)
 var completedCount = 0
-while try multipleJournal.pendingIntent(for: "device-uid") != nil {
+while try multipleJournal.pendingRecovery(for: "device-uid") != nil {
     let completed = try multipleJournal.acknowledge(uid: "device-uid", observed: snapshot(value: 0.4), now: Date(), commit: { operation in try operation(); return true })
     check(completed, "each historical intent is durably archived")
     completedCount += 1
@@ -158,3 +158,44 @@ func tryBlocked(_ journal: AudioDuckingRecoveryJournal, _ uid: String) -> Bool {
 try writeBeforeRelaunch(restartDirectory, pending)
 try verifyAfterRelaunch(restartDirectory, pending)
 print("AudioDucking recovery decisions passed")
+
+// Explicit off/on recovery also covers confirmed records after a crash. This
+// never infers continuous ownership or changes the original archived phase.
+let confirmedResetDirectory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("voiceink-confirmed-reset-\(UUID().uuidString)")
+defer { try? FileManager.default.removeItem(at: confirmedResetDirectory) }
+let confirmedResetJournal = try AudioDuckingRecoveryJournal(directory: confirmedResetDirectory)
+let crashedConfirmed = record(phase: .confirmed)
+try confirmedResetJournal.write(crashedConfirmed)
+let eligibleConfirmedReset = try confirmedResetJournal.pendingRecovery(for: "device-uid")?.1
+check(eligibleConfirmedReset == crashedConfirmed,
+      "confirmed crash evidence is eligible for explicit user reset")
+let wrongUIDReset = try confirmedResetJournal.acknowledge(uid: "other-device", observed: snapshot(uid: "other-device", value: 0.24), now: Date(), reason: .userReenabledDucking, commit: { operation in try operation(); return true })
+check(!wrongUIDReset, "explicit reset never clears another output's confirmed record")
+let rejectedReset = try confirmedResetJournal.acknowledge(uid: "device-uid", observed: snapshot(value: 0.24), now: Date(), reason: .userReenabledDucking, commit: { _ in false })
+check(!rejectedReset, "a live-write/event veto keeps confirmed recovery blocked")
+if case .record(let remaining) = try confirmedResetJournal.read() {
+    check(remaining == crashedConfirmed, "a rejected reset preserves the original confirmed evidence")
+} else { check(false, "a rejected reset cannot erase confirmed evidence") }
+let explicitReset = try confirmedResetJournal.acknowledge(uid: "device-uid", observed: snapshot(value: 0.24), now: Date(), reason: .userReenabledDucking, commit: { operation in try operation(); return true })
+check(explicitReset, "the owner can explicitly reset confirmed recovery without an audio setter")
+if case .absent = try confirmedResetJournal.read() {} else { check(false, "reset removes only the accepted active record") }
+let archivedReceipt = confirmedResetDirectory.appendingPathComponent("accepted-\(crashedConfirmed.cycleID.uuidString).json")
+let confirmedReceipt = try JSONDecoder().decode(AudioDuckingRecoveryJournal.Acknowledgment.self, from: Data(contentsOf: archivedReceipt))
+check(confirmedReceipt.record == crashedConfirmed && confirmedReceipt.record.phase == .confirmed,
+      "explicit reset preserves baseline, values and original phase rather than claiming restoration")
+check(confirmedReceipt.reason == "user_reenabled_ducking" && confirmedReceipt.observedValues == [0.24],
+      "reset archive records the actual action and observed volume")
+let confirmedStillBlocked = try confirmedResetJournal.isAcknowledgedDeviceBlocked("device-uid")
+check(!confirmedStillBlocked, "an accepted confirmed record no longer blocks a new session")
+var freshLease = AudioDuckingLease()
+let freshToken = freshLease.begin(UUID())
+check(freshLease.activate(freshToken, values: [0.24], config: AudioDuckingConfiguration(mode: .duck), now: 0), "a fresh recording can start after reset")
+check(freshLease.baseline == [0.24], "fresh recording retains current user volume, not the old crash baseline")
+
+let heldConfirmed = record(phase: .confirmed)
+try confirmedResetJournal.write(heldConfirmed)
+try confirmedResetJournal.holdMissingDevice(heldConfirmed)
+let heldReset = try confirmedResetJournal.acknowledge(uid: "device-uid", observed: snapshot(value: 0.24), now: Date(), reason: .userReenabledDucking, commit: { operation in try operation(); return true })
+let heldStillBlocked = try confirmedResetJournal.isAcknowledgedDeviceBlocked("device-uid")
+check(heldReset && !heldStillBlocked, "a connected output's held confirmed record can also be explicitly reset")
+print("Confirmed crash recovery reset checks passed; no HAL writes")

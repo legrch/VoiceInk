@@ -113,11 +113,13 @@ final class MediaController: ObservableObject {
         }
     }
 
-    func acknowledgeDuckingRecovery() {
-        if duckingService?.acknowledgeRecovery() == true {
-            canAcknowledgeDuckingRecovery = false
-            incompleteDuckingRestoration = false
-        }
+    @discardableResult
+    func acknowledgeDuckingRecovery(reason: AudioDuckingRecoveryJournal.AcknowledgmentReason = .userSetVolume) -> Bool {
+        guard duckingService?.acknowledgeRecovery(reason: reason) == true else { return false }
+        canAcknowledgeDuckingRecovery = false
+        incompleteDuckingRestoration = false
+        duckingQuarantined = false
+        return true
     }
 
     func dismissIncompleteDuckingRestoration() {

@@ -48,6 +48,11 @@ struct AudioSetupView: View {
 
             Section {
                 Toggle("Lower Audio While Recording", isOn: duckingEnabled)
+                if mediaController.duckingQuarantined || mediaController.canAcknowledgeDuckingRecovery {
+                    Text("Check system volume, then switch this off and on to reset.")
+                        .foregroundStyle(.secondary)
+                        .help("Reset archives recovery evidence without changing volume. It does not cancel a previously pending system change.")
+                }
 
                 if duckingSettings.configuration.mode == .duck {
                     if let name = mediaController.audioOutputName {
@@ -128,8 +133,12 @@ struct AudioSetupView: View {
 
     private var duckingEnabled: Binding<Bool> {
         Binding(get: { duckingSettings.configuration.mode == .duck }, set: { enabled in
-            if enabled { setAudioMode(.duck) }
-            else if duckingSettings.configuration.mode == .duck { setAudioMode(.unchanged) }
+            if enabled {
+                if mediaController.duckingQuarantined || mediaController.canAcknowledgeDuckingRecovery {
+                    guard mediaController.acknowledgeDuckingRecovery(reason: .userReenabledDucking) else { return }
+                }
+                setAudioMode(.duck)
+            } else if duckingSettings.configuration.mode == .duck { setAudioMode(.unchanged) }
         })
     }
 

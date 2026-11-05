@@ -1,6 +1,6 @@
 # VoiceInk Personal
 
-A personal fork of [Beingpax/VoiceInk](https://github.com/Beingpax/VoiceInk), with smooth audio ducking during dictation, per-output background levels and restoration of the original volume. The first personal release packages the owner-tested application from source `78cdb94d7c8875687124421adc667c9dbbd8de2b`.
+A personal fork of [Beingpax/VoiceInk](https://github.com/Beingpax/VoiceInk), with smooth audio ducking during dictation, per-output background levels and restoration of the original volume. The first personal release is based on the owner-tested `78cdb94d7c8875687124421adc667c9dbbd8de2b` application, with an explicit recovery-reset fix found during release review.
 
 **[Download the ready-to-use application](https://github.com/legrch/VoiceInk/releases/latest)** · Apple Silicon (M1 or later) · macOS 15+
 
@@ -35,6 +35,8 @@ Default-location backups are under `~/Library/Application Support/VoiceInk-Perso
 In **Audio > Audio Ducking**, enable **Lower Audio While Recording**. Turn off **Pause Media While Recording** and **Mute Audio While Recording** to keep music playing. Set **Volume During Recording** and **Fade Duration**. Levels are remembered per output device. **Current Volume** is read-only; **Volume Before Recording** captures the original level. Test a short dictation with music before relying on a new audio device. Outputs without volume controls are unsupported.
 
 The package does not include anyone's settings, API keys, transcription models or machine-specific Karabiner mappings. Choose your own shortcut in VoiceInk. Automatic updates are disabled; install subsequent personal releases explicitly. Intel builds are not provided in this release.
+
+If ducking pauses after an interruption, first set a comfortable system volume, then turn **Lower Audio While Recording** off and on. This explicitly archives the current output's recovery evidence and enables a fresh session without changing volume or claiming an old write was confirmed/cancelled. A live pending write, unavailable output or unreadable evidence keeps the reset blocked.
 
 ## Upstream 2.25 compatibility notes
 
