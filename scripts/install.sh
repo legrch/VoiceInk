@@ -2,8 +2,8 @@
 # Install the pinned personal release. Never launch the app or change Gatekeeper.
 set -euo pipefail
 VERSION=personal-2.25.1
-ASSET=VoiceInk-Personal-78cdb94-AppleSilicon.zip
-ARCHIVE_SHA256=226af9cc3f1c46ba5e3116a36df1aacf1715d9779ec3f0d209a46fff43e6753b
+ASSET=VoiceInk-Personal-2.25.1-AppleSilicon.zip
+ARCHIVE_SHA256=c089ba44f6c2845c216f41e12f48d86df5800efce85d899fb085abb1997caef8
 CERT_SHA256=fbb0182020b4091415f9ee73f17b156010daac2291f3f700a85ba4c5d7dbdb89
 BUNDLE_ID=com.prakashjoshipax.VoiceInk
 
@@ -67,7 +67,7 @@ main() {
     [[ -f "$archive" ]] || die 'Archive not found.'
     [[ $(shasum -a 256 "$archive" | awk '{print $1}') == "$ARCHIVE_SHA256" ]] || die 'Archive checksum mismatch; nothing installed.'
     ditto -x -k "$archive" "$work/unpacked"
-    local candidate="$work/unpacked/voiceink-friend-78cdb94/VoiceInk.app"
+    local candidate="$work/unpacked/VoiceInk-Personal/VoiceInk.app"
     [[ -d "$candidate" && ! -L "$candidate" ]] || die 'Expected application missing from archive.'
     codesign --verify --deep --strict "$candidate"
     [[ $(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$candidate/Contents/Info.plist") == "$BUNDLE_ID" ]] || die 'Unexpected bundle identifier.'
