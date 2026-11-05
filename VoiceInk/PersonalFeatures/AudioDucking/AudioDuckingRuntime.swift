@@ -229,7 +229,14 @@ final class AudioDuckingRuntime {
         }
         if inherited {
             guard let old = beginSnapshot, snapshot.hasSameControls(as: old),
-                  snapshot.muted == old.muted, lease.lastConfirmed.map({ AudioDuckingOutputSnapshot.levelsMatch(snapshot.values, $0) }) == true else {
+                  lease.lastConfirmed.map({ AudioDuckingOutputSnapshot.levelsMatch(snapshot.values, $0) }) == true else {
+                relinquish(token: token, incomplete: true)
+                return nil
+            }
+            // Listeners can pause this new event token after latch transfer.
+            // Reconcile and persist a real mute change on the new runtime token
+            // before activation; the event epoch still fences every setter.
+            if snapshot.muted != old.muted, !observeMuteChange(token: token) {
                 relinquish(token: token, incomplete: true)
                 return nil
             }

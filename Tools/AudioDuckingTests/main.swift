@@ -1999,3 +1999,133 @@ for baseline: [Float] in [[0.6], [0.6, 0.3]] {
           "matching nil mute rejection retires the predecessor instead of restoring during B")
 }
 print("Unavailable, unknown-mute and changed-control successor rejection checks passed")
+
+// Enumerate both sides of the event-lease transfer. Inherited admission must
+// reconcile a real mute change on the new runtime token before any setter.
+for baseline: [Float] in [[0.6], [0.6, 0.3]] {
+    for initialMute in [false, true] {
+        for pauseSide in ["before-transfer", "after-transfer"] {
+            for earlyStop in [false, true] {
+                let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("voiceink-transfer-mute-\(UUID().uuidString)")
+                let journal = try AudioDuckingRecoveryJournal(directory: directory)
+                let output = makeOutput(baseline); output.requiresWriteNotification = true; output.deferWrites = true
+                let latch = AudioDuckingEventLatch()
+                let runtime = AudioDuckingRuntime(output: output, journal: journal, normalWriteAllowed: { latch.permits($0) })
+                var cfg = runtimeConfig; cfg.restoreDelaySeconds = 1
+                let a = runtime.begin(sessionID: UUID(), desired: cfg)!
+                check(latch.admit(a, observedEpoch: latch.currentEpoch()), "transfer-side mute fixture admitted")
+                runtime.activate(token: a, now: 0)
+                var clock = 0.0
+                driveAsyncTransition(runtime, output, token: a, untilIdle: false, clock: &clock)
+                func setMute(_ value: Bool) {
+                    let old = output.devices[1]!
+                    output.devices[1] = AudioDuckingOutputSnapshot(deviceID: old.deviceID, uid: old.uid,
+                        elements: old.elements, values: old.values, muted: value, control: old.control,
+                        stereoChannels: old.stereoChannels, balance: old.balance, channelLayout: old.channelLayout)
+                }
+                if initialMute {
+                    let epoch = latch.pause(ifCurrent: a)!
+                    setMute(true)
+                    check(runtime.observeMuteChange(token: a) && latch.resume(a, after: epoch), "prepare true initial mute")
+                }
+                let b = runtime.begin(sessionID: UUID(), desired: cfg, deferUntilAdmitted: true)!
+                runtime.updateRetainedPercent(55, token: b, now: clock + 0.01)
+                runtime.activate(token: b, now: clock + 0.22)
+                if earlyStop { runtime.end(token: b, now: clock + 0.25) }
+                let writes = output.writes.count
+                var pauseEpoch: UInt64?
+                let admitted = runtime.completeDeferredBegin(now: clock + 0.3) { old, new, _ in
+                    if pauseSide == "before-transfer" {
+                        setMute(!initialMute)
+                        pauseEpoch = latch.pause(ifCurrent: old)
+                        return latch.handoff(from: old, to: new)
+                    }
+                    check(latch.handoff(from: old, to: new), "transfer event lease before successor notification")
+                    setMute(!initialMute)
+                    pauseEpoch = latch.pause(ifCurrent: new)
+                    return true
+                }
+                check(output.writes.count == writes, "a mute pause on either side of transfer prevents all setters")
+                if pauseSide == "before-transfer" {
+                    check(admitted == nil && runtime.deferredBeginToken == b && runtime.lease.token == a,
+                          "pre-transfer pause preserves the original owner and successor request")
+                    check(runtime.observeMuteChange(token: a) && latch.resume(a, after: pauseEpoch!), "reconcile the original token before retrying admission")
+                    check(runtime.completeDeferredBegin(now: clock + 0.31, admit: { old, new, _ in latch.handoff(from: old, to: new) }) == b,
+                          "reconciled original token transfers normally")
+                } else {
+                    check(admitted == b && runtime.lease.token == b && runtime.lease.baseline == baseline,
+                          "post-transfer mute pause preserves the successor and original baseline")
+                    check(runtime.capturedOutput?.muted == !initialMute && !runtime.isQuarantined,
+                          "new runtime token reconciles changed mute before activation can write")
+                    guard case .record(let durable) = try journal.read() else { check(false, "post-transfer durable evidence exists"); exit(1) }
+                    check(durable.phase == .confirmed && durable.muted == !initialMute && durable.baseline == baseline,
+                          "post-transfer mute metadata is durable before the first successor setter")
+                    let restarted = AudioDuckingRecoveryCoordinator(journal: journal, output: output, resolve: { $0 == "one" ? 1 : nil })
+                    restarted.prepare(now: 10)
+                    if case .incomplete = restarted.state {} else { check(false, "restart must preserve post-transfer restoration evidence") }
+                    guard case .record(let retained) = try journal.read() else { check(false, "restart cannot clear the inherited baseline"); exit(1) }
+                    check(retained == durable && output.writes.count == writes, "restart inventory never writes or erases post-transfer evidence")
+                    check(runtime.observeMuteChange(token: b) && latch.resume(b, after: pauseEpoch!),
+                          "queued successor mute callback safely resumes its exact epoch")
+                }
+                check(runtime.lease.baseline == baseline && runtime.effectiveConfiguration?.retainedPercent == 55,
+                      "both transfer sides retain baseline and selected percentage")
+                clock += 0.4
+                if !earlyStop {
+                    driveAsyncTransition(runtime, output, token: b, untilIdle: false, clock: &clock)
+                    runtime.end(token: b, now: clock)
+                }
+                driveAsyncTransition(runtime, output, token: b, untilIdle: true, clock: &clock)
+                check(output.devices[1]!.values == baseline && output.devices[1]!.muted == !initialMute,
+                      "successor Stop restores original mono/stereo levels while keeping the owner's mute")
+                if case .absent = try journal.read() {} else { check(false, "completed transfer-side cycle clears its own journal") }
+                try FileManager.default.removeItem(at: directory)
+            }
+        }
+    }
+}
+
+for failure in ["journal-failure", "route", "sleep"] {
+    let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("voiceink-transfer-revocation-\(UUID().uuidString)")
+    let journal = try AudioDuckingRecoveryJournal(directory: directory)
+    let output = makeOutput([0.6]); output.requiresWriteNotification = true; output.deferWrites = true
+    let latch = AudioDuckingEventLatch()
+    let runtime = AudioDuckingRuntime(output: output, journal: journal, normalWriteAllowed: { latch.permits($0) })
+    let a = runtime.begin(sessionID: UUID(), desired: runtimeConfig)!
+    check(latch.admit(a, observedEpoch: latch.currentEpoch()), "post-transfer failure fixture admitted")
+    runtime.activate(token: a, now: 0)
+    var clock = 0.0
+    driveAsyncTransition(runtime, output, token: a, untilIdle: false, clock: &clock)
+    let b = runtime.begin(sessionID: UUID(), desired: runtimeConfig, deferUntilAdmitted: true)!
+    runtime.activate(token: b, now: clock + 0.22)
+    let writes = output.writes.count
+    var pauseEpoch: UInt64?
+    let next = runtime.completeDeferredBegin(now: clock + 0.3) { old, new, _ in
+        check(latch.handoff(from: old, to: new), "failure fixture transfers to B")
+        let current = output.devices[1]!
+        output.devices[1] = AudioDuckingOutputSnapshot(deviceID: 1, uid: "one", elements: [1], values: current.values, muted: true)
+        pauseEpoch = latch.pause(ifCurrent: new)
+        if failure == "journal-failure" {
+            try! Data("retain corrupt transfer evidence".utf8).write(to: directory.appendingPathComponent("recovery-v1.json"))
+        } else {
+            if failure == "route" {
+                output.devices[2] = AudioDuckingOutputSnapshot(deviceID: 2, uid: "two", elements: [1], values: [0.8], muted: false)
+                output.selected = 2
+            }
+            _ = latch.invalidate(ifCurrent: new)
+        }
+        return true
+    }
+    if failure == "journal-failure" {
+        check(next == nil && runtime.isQuarantined && runtime.failureReason == "journal_confirm_failed",
+              "failed post-transfer persistence cannot admit a writable successor")
+        if case .invalid = try journal.read() {} else { check(false, "post-transfer persistence failure retains corrupt evidence") }
+    } else {
+        check(!latch.resume(b, after: pauseEpoch!), "route/sleep revocation defeats queued mute resume")
+        if next != nil { runtime.invalidate(token: b) }
+    }
+    runtime.end(token: b, now: 10); runtime.tick(token: b, now: 20)
+    check(output.writes.count == writes, "post-transfer persistence and lifecycle failures never issue a setter")
+    try FileManager.default.removeItem(at: directory)
+}
+print("Both sides of mute lease transfer, durable relaunch and post-transfer failure matrix passed")
