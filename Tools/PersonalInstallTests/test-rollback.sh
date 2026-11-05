@@ -67,3 +67,17 @@ fi
 rg -q 'Quit VoiceInk before installation' "$root/reopen-output"
 [[ $(cat "$root/applications/VoiceInk.app/marker") == original ]]
 printf 'CustomSounds backup and reopening-before-backup refusal passed.\n'
+
+unset VOICEINK_TEST_REOPEN
+mkdir "$root/applications/.voiceink-personal-install.lock"
+if bash "$root/install-test.sh" "$root/candidate/VoiceInk.app" >"$root/local-lock-output" 2>&1; then
+    echo 'FAIL: local installer ignored transaction lock' >&2; exit 1
+fi
+rg -q 'destination lock' "$root/local-lock-output"
+if bash -c 'source "$1"; pgrep() { return 1; }; main --destination "$2" --archive "$3"' bash "$PWD/scripts/install.sh" "$root/applications/VoiceInk.app" "$root/unused.zip" >"$root/release-lock-output" 2>&1; then
+    echo 'FAIL: release installer ignored local transaction lock' >&2; exit 1
+fi
+rg -q 'retained install lock' "$root/release-lock-output"
+[[ -d "$root/applications/.voiceink-personal-install.lock" && $(cat "$root/applications/VoiceInk.app/marker") == original ]]
+rmdir "$root/applications/.voiceink-personal-install.lock"
+printf 'Both installers refuse the same held destination lock without mutation.\n'

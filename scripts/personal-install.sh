@@ -26,6 +26,8 @@ fi
 checkdir=$(mktemp -d /private/tmp/voiceink-install-check.XXXXXX)
 staging=''
 replacing=false
+lock=/Applications/.voiceink-personal-install.lock
+locked=false
 cleanup() {
     if [[ "$replacing" == true && -n "$staging" && -d "$staging/original.app" ]]; then
         if [[ -e "$installed" ]]; then
@@ -35,11 +37,16 @@ cleanup() {
             mv "$staging/original.app" "$installed" || echo "Rollback failed; original remains at $staging/original.app" >&2
         fi
     fi
+    [[ "$locked" != true ]] || rmdir "$lock" || true
     rm -rf "$checkdir"
 }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+if ! mkdir "$lock" 2>/dev/null; then
+    echo 'Another VoiceInk installation owns the destination lock.' >&2; exit 1
+fi
+locked=true
 codesign -d --extract-certificates="$checkdir/old" "$installed" >/dev/null 2>&1
 codesign -d --extract-certificates="$checkdir/new" "$candidate" >/dev/null 2>&1
 if [[ ! -s "$checkdir/old0" || ! -s "$checkdir/new0" ]] || ! cmp -s "$checkdir/old0" "$checkdir/new0"; then

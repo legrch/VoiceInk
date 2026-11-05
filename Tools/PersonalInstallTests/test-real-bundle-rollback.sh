@@ -7,6 +7,7 @@ root=$(mktemp -d /private/tmp/voiceink-real-rollback.XXXXXX)
 trap 'rm -rf "$root"' EXIT
 mkdir -p "$root/applications" "$root/bin"
 ditto "$candidate" "$root/applications/VoiceInk.app"
+original_inode=$(stat -f %i "$root/applications/VoiceInk.app")
 before=$(shasum -a 256 "$root/applications/VoiceInk.app/Contents/MacOS/VoiceInk" | cut -d' ' -f1)
 cat > "$root/bin/pgrep" <<'SH'
 #!/bin/bash
@@ -17,7 +18,12 @@ cat > "$root/bin/codesign" <<'SH'
 app=${!#}
 if [[ "$1" == --verify && "$app" == "$VOICEINK_TEST_ROOT/applications/VoiceInk.app" ]]; then
     countfile="$VOICEINK_TEST_ROOT/count"
-    if [[ -f "$countfile" ]]; then exit 1; fi
+    if [[ -f "$countfile" ]]; then
+        inode=$(stat -f %i "$app")
+        [[ "$inode" != "$VOICEINK_TEST_ORIGINAL_INODE" ]] || exit 42
+        printf '%s' "$inode" > "$VOICEINK_TEST_ROOT/candidate-was-placed"
+        exit 1
+    fi
     : > "$countfile"
 fi
 exec /usr/bin/codesign "$@"
@@ -35,10 +41,12 @@ text=text.replace('sounds="$HOME/Library/Application Support/VoiceInk/CustomSoun
 assert '/Applications' not in text and '$HOME/Library' not in text
 (root/'install-test.sh').write_text(text)
 PY
-export PATH="$root/bin:$PATH" VOICEINK_TEST_ROOT="$root" VOICEINK_INSTALL_APPROVED=YES
+export PATH="$root/bin:$PATH" VOICEINK_TEST_ROOT="$root" VOICEINK_TEST_ORIGINAL_INODE="$original_inode" VOICEINK_INSTALL_APPROVED=YES
 if bash "$root/install-test.sh" "$candidate" >"$root/output" 2>&1; then
     echo 'FAIL: injected verification failure was ignored' >&2; exit 1
 fi
+[[ -s "$root/candidate-was-placed" ]] || { echo 'FAIL: replacement was not observed' >&2; exit 1; }
+[[ $(stat -f %i "$root/applications/VoiceInk.app") == "$original_inode" ]] || { echo 'FAIL: original directory was not restored' >&2; exit 1; }
 after=$(shasum -a 256 "$root/applications/VoiceInk.app/Contents/MacOS/VoiceInk" | cut -d' ' -f1)
 [[ "$before" == "$after" ]] || { echo 'FAIL: original executable was not restored' >&2; exit 1; }
 /usr/bin/codesign --verify --deep --strict "$root/applications/VoiceInk.app"

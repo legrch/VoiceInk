@@ -47,6 +47,8 @@ If ducking pauses after an interruption, first set a comfortable system volume, 
 
 This fork retains these known upstream behaviors: vocabulary correction applies when terms are configured even if an older opt-out preference exists; website modes match host/path and query- or fragment-specific rules may need adjustment; after importing older Soniox modes, restart before using or editing them; very large Auto-Learn AI-review backlogs can stall and may require manual dictionary review. These optional-feature limits do not change the personal audio-ducking settings.
 
+Canceling a batch transcription can leave recording temporarily unavailable until the provider request finishes or times out. The recording guard retains shared cleanup ownership during that drain.
+
 ## Fork development
 
 - `main` is the stable personal fork; use feature branches and reviewed `--no-ff` merge commits (no squash or rebase merges).
