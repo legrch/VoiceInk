@@ -188,21 +188,13 @@ final class AudioDuckingService {
     /// Snapshot is taken synchronously at recording begin, before the 220 ms trigger.
     func begin(sessionID: UUID, desired: AudioDuckingConfiguration) -> AudioDuckingLease.Token? {
         queue.sync {
+            let eventEpoch = latch.currentEpoch()
             retainUnsettledWrites()
             if let output = AudioDuckingCoreAudio().currentOutputIdentity(), !unsettledWrites.allows(output.uid) {
                 publishStatus(.incomplete)
                 return nil
             }
             guard !recoveryBlocked else { publishStatus(.incomplete); return nil }
-            if !runtime.hasOwnershipCycle {
-                guard let journal else { recoveryBlocked = true; publishStatus(.incomplete); return nil }
-                do {
-                    switch try journal.read() {
-                    case .absent: break
-                    case .record, .invalid: recoveryBlocked = true; publishStatus(.incomplete); return nil
-                    }
-                } catch { recoveryBlocked = true; publishStatus(.incomplete); return nil }
-            }
             if runtime.hasPendingWrite {
                 // Do not let an earlier session restore over the new recording.
                 // Its in-flight HAL write cannot be cancelled, so quarantine it.
@@ -237,7 +229,17 @@ final class AudioDuckingService {
                 runtime.invalidate(token: pending)
                 latch.clear(pending)
             }
-            let eventEpoch = latch.currentEpoch()
+            // Invalidation can retire inherited ownership while leaving a durable
+            // recovery obligation. Inventory again before a new cycle may exist.
+            retainUnsettledWrites()
+            guard let selected = AudioDuckingCoreAudio().currentOutputIdentity(),
+                  unsettledWrites.allows(selected.uid) else { publishStatus(.incomplete); return nil }
+            do {
+                let inheritedCycle = runtime.hasOwnershipCycle ? runtime.lease.token?.cycleID : nil
+                guard try journal.prepareRecordingCycle(inheriting: inheritedCycle, selectedUID: selected.uid) else {
+                    recoveryBlocked = true; publishStatus(.incomplete); return nil
+                }
+            } catch { recoveryBlocked = true; publishStatus(.incomplete); return nil }
             guard let token = runtime.begin(sessionID: sessionID, desired: desired) else {
                 publishStatus(runtime.status)
                 return nil
@@ -275,6 +277,12 @@ final class AudioDuckingService {
             guard let self else { return }
             if self.latch.isMutePaused(token) { self.deferredActivation = token; return }
             guard self.latch.permits(token) else { return }
+            guard !self.recoveryBlocked else {
+                _ = self.latch.invalidate(ifCurrent: token)
+                self.runtime.invalidate(token: token)
+                self.publishStatus(.incomplete)
+                return
+            }
             self.runtime.activate(token: token, now: ProcessInfo.processInfo.systemUptime)
             self.publishStatus(self.runtime.status)
             self.schedule(token: token)
@@ -482,7 +490,7 @@ final class AudioDuckingService {
             self.runtime.tick(token: token, now: now)
             self.publishStatus(self.runtime.status)
             if self.runtime.status == .active, !self.runtime.hasPendingWrite,
-               self.runtime.lease.transition?.isComplete(at: now) == true {
+               self.runtime.transitionSettled {
                 self.timer?.cancel()
                 self.timer = nil
                 return

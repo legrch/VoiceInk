@@ -1073,3 +1073,119 @@ check(!inheritedMute.hasDevices, "confirmed unmute releases only its recorded de
 check(inheritedMute.restorationDevices(for: muteSessionB, cancelled: false).isEmpty,
       "a device muted before ownership was acquired is never unmuted")
 print("Legacy mute cancellation and mode-independent restoration checks passed")
+
+// Replay the service admission ordering with its production journal gate.
+let handoffDirectory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("voiceink-handoff-\(UUID().uuidString)")
+defer { try? FileManager.default.removeItem(at: handoffDirectory) }
+let handoffJournal = try AudioDuckingRecoveryJournal(directory: handoffDirectory)
+let handoffOutput = makeOutput([0.6])
+handoffOutput.requiresWriteNotification = true
+handoffOutput.deferWrites = true
+let handoffLatch = AudioDuckingEventLatch()
+let handoffRuntime = AudioDuckingRuntime(output: handoffOutput, journal: handoffJournal,
+    normalWriteAllowed: { handoffLatch.permits($0) },
+    writeAdmission: { handoffLatch.performWrite(ifCurrent: $0, $1) })
+let handoffA = handoffRuntime.begin(sessionID: UUID(), desired: runtimeConfig)!
+check(handoffLatch.admit(handoffA, observedEpoch: handoffLatch.currentEpoch()), "handoff admits original token")
+handoffRuntime.activate(token: handoffA, now: 0)
+handoffOutput.deliverPendingWrite()
+handoffRuntime.volumeChanged(token: handoffA, now: 0.1)
+guard case .record(let originalHandoff) = try handoffJournal.read() else { fatalError("confirmed handoff evidence missing") }
+check(handoffRuntime.hasOwnershipCycle && originalHandoff.phase == .confirmed, "old recording owns a confirmed reduced level")
+let beginEntryEpoch = handoffLatch.currentEpoch()
+_ = handoffLatch.invalidate()
+check(handoffLatch.pendingInvalidation() == handoffA, "route event is observed before queued cleanup")
+handoffRuntime.invalidate(token: handoffA)
+handoffLatch.clear(handoffA)
+let deniedSameOutput = try handoffJournal.prepareRecordingCycle(inheriting: nil, selectedUID: "one")
+check(!deniedSameOutput, "post-invalidation admission cannot recapture a reduced level as its baseline")
+guard case .record(let untouchedHandoff) = try handoffJournal.read() else { fatalError("old recovery evidence erased") }
+check(untouchedHandoff == originalHandoff, "same-output denial retains original baseline and confirmed values")
+let foreignCycle = AudioDuckingRecoveryRecord(version: 1, cycleID: UUID(), deviceUID: "two", control: .physicalMain,
+    elements: [1], stereoChannels: [], channelLayout: Data(), balance: nil, muted: false,
+    baseline: [0.8], confirmed: [0.8], phase: .writeIntent, intended: [0.16])
+var foreignRejected = false
+do { try handoffJournal.writeOwned(foreignCycle) } catch { foreignRejected = true }
+check(foreignRejected, "a setter cannot overwrite another cycle's active recovery record")
+let allowedOtherOutput = try handoffJournal.prepareRecordingCycle(inheriting: nil, selectedUID: "two")
+check(allowedOtherOutput, "a different output proceeds only after the original is durably held")
+let heldOriginal = try handoffJournal.pendingRecovery(for: "one")?.1
+let originalOutputBlocked = try handoffJournal.isAcknowledgedDeviceBlocked("one")
+check(heldOriginal == originalHandoff && originalOutputBlocked, "original output remains blocked with its baseline preserved")
+handoffOutput.devices[2] = AudioDuckingOutputSnapshot(deviceID: 2, uid: "two", elements: [1], values: [0.8], muted: false)
+handoffOutput.selected = 2
+let handoffB = handoffRuntime.begin(sessionID: UUID(), desired: runtimeConfig)!
+check(!handoffLatch.admit(handoffB, observedEpoch: beginEntryEpoch), "an event during begin cannot be hidden by a later epoch sample")
+check(handoffLatch.admit(handoffB, observedEpoch: handoffLatch.currentEpoch()), "a subsequent stable begin can admit the new output")
+handoffRuntime.activate(token: handoffB, now: 1)
+handoffRuntime.invalidate(token: handoffA)
+check(handoffRuntime.lease.token == handoffB, "queued old-token cleanup cannot invalidate the replacement token")
+guard case .record(let activeHandoff) = try handoffJournal.read() else { fatalError("replacement intent missing") }
+let stillHeldOriginal = try handoffJournal.pendingRecovery(for: "one")?.1
+check(activeHandoff.cycleID == handoffB.cycleID && stillHeldOriginal == originalHandoff,
+      "replacement intent coexists with the previous output's complete held evidence")
+print("Post-invalidation service admission and foreign-cycle preservation checks passed")
+
+func driveAsyncTransition(_ runtime: AudioDuckingRuntime, _ output: FakeOutput,
+                          token: AudioDuckingLease.Token, untilIdle: Bool, clock: inout Double) {
+    for _ in 0..<500 {
+        if untilIdle ? runtime.status == .idle : runtime.transitionSettled { return }
+        clock += 0.01
+        if runtime.hasPendingWrite {
+            check(output.pendingWrite != nil, "fake hardware has exactly the issued pending effect")
+            output.deliverPendingWrite()
+            runtime.volumeChanged(token: token, now: clock)
+        } else { runtime.tick(token: token, now: clock) }
+    }
+    check(false, "nonzero-duration asynchronous transition finishes within the fake clock bound")
+}
+func checkStereoFrames(_ output: FakeOutput) {
+    check(output.writes.count > 4 && output.writes.count % 2 == 0, "fade contains multiple complete stereo samples")
+    for index in stride(from: 0, to: output.writes.count, by: 2) {
+        let left = output.writes[index], right = output.writes[index + 1]
+        check(left.1 == 1 && right.1 == 2, "each sampled pair services both channels before the next pair")
+        check(abs(left.2 / 0.6 - right.2 / 0.3) < 0.00001, "both targets in a sample retain the same balance coefficient")
+    }
+}
+var timedConfig = runtimeConfig
+timedConfig.fadeDownSeconds = 1.5
+timedConfig.fadeUpSeconds = 1.5
+timedConfig.restoreDelaySeconds = 0
+let timedStereo = makeOutput([0.6, 0.3])
+timedStereo.requiresWriteNotification = true
+timedStereo.deferWrites = true
+let timedRuntime = AudioDuckingRuntime(output: timedStereo)
+let timedToken = timedRuntime.begin(sessionID: UUID(), desired: timedConfig)!
+timedRuntime.activate(token: timedToken, now: 0)
+timedRuntime.tick(token: timedToken, now: 0.02)
+timedRuntime.updateRetainedPercent(50, token: timedToken, now: 0.021)
+timedStereo.deliverPendingWrite()
+timedRuntime.volumeChanged(token: timedToken, now: 0.03)
+check(timedStereo.writes.count == 2 && timedStereo.writes[1].1 == 2, "later acknowledgment completes the sampled right channel before resampling left")
+check(timedRuntime.effectiveConfiguration?.retainedPercent == 20, "live level change waits for the sampled channel pair")
+timedStereo.deliverPendingWrite()
+timedRuntime.volumeChanged(token: timedToken, now: 0.04)
+check(timedRuntime.effectiveConfiguration?.retainedPercent == 50 && timedRuntime.lease.baseline == [0.6, 0.3],
+      "live retarget starts after a balanced sample without changing the original baseline")
+var timedClock = 0.04
+driveAsyncTransition(timedRuntime, timedStereo, token: timedToken, untilIdle: false, clock: &timedClock)
+check(AudioDuckingOutputSnapshot.levelsMatch(timedStereo.devices[1]!.values, [0.3, 0.15]), "nonzero stereo fade reaches retained target")
+checkStereoFrames(timedStereo)
+timedRuntime.end(token: timedToken, now: timedClock)
+driveAsyncTransition(timedRuntime, timedStereo, token: timedToken, untilIdle: true, clock: &timedClock)
+check(timedStereo.devices[1]!.values == [0.6, 0.3], "nonzero asynchronous restoration reaches the original stereo baseline")
+checkStereoFrames(timedStereo)
+
+let stoppedStereo = makeOutput([0.6, 0.3])
+stoppedStereo.requiresWriteNotification = true
+stoppedStereo.deferWrites = true
+let stoppedRuntime = AudioDuckingRuntime(output: stoppedStereo)
+let stoppedToken = stoppedRuntime.begin(sessionID: UUID(), desired: timedConfig)!
+stoppedRuntime.activate(token: stoppedToken, now: 0)
+stoppedRuntime.tick(token: stoppedToken, now: 0.02)
+stoppedRuntime.end(token: stoppedToken, now: 0.021)
+var stoppedClock = 0.021
+driveAsyncTransition(stoppedRuntime, stoppedStereo, token: stoppedToken, untilIdle: true, clock: &stoppedClock)
+check(stoppedStereo.devices[1]!.values == [0.6, 0.3], "Stop during a sampled pair still restores the original baseline")
+checkStereoFrames(stoppedStereo)
+print("Timed stereo frame fairness, live retarget and mid-pair Stop checks passed")

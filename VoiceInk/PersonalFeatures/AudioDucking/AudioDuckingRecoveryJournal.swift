@@ -149,6 +149,33 @@ final class AudioDuckingRecoveryJournal {
         return .record(record)
     }
 
+    /// Re-evaluate after lifecycle invalidation, before a replacement cycle is
+    /// admitted. A different output may proceed only after durable preservation.
+    func prepareRecordingCycle(inheriting cycleID: UUID?, selectedUID: String) throws -> Bool {
+        switch try read() {
+        case .absent: return true
+        case .invalid: throw JournalError.invalidRecord
+        case .record(let record):
+            if record.phase == .restored { try clear(); return true }
+            if record.cycleID == cycleID { return true }
+            guard record.deviceUID != selectedUID else { return false }
+            try holdMissingDevice(record)
+            return true
+        }
+    }
+
+    /// The journal has a process-lifetime exclusive lock. Serialized writers
+    /// must never replace a different cycle's unresolved active evidence.
+    func writeOwned(_ record: AudioDuckingRecoveryRecord) throws {
+        switch try read() {
+        case .absent: break
+        case .invalid: throw JournalError.invalidRecord
+        case .record(let current):
+            guard current.cycleID == record.cycleID else { throw JournalError.invalidRecord }
+        }
+        try write(record)
+    }
+
     func write(_ record: AudioDuckingRecoveryRecord) throws {
         guard record.isValid, let data = try? JSONEncoder().encode(record), data.count <= 65_536 else { throw JournalError.invalidRecord }
         let temp = directory.appendingPathComponent(".recovery-\(UUID().uuidString).tmp")

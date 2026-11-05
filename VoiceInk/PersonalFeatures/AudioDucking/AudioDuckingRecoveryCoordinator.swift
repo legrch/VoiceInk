@@ -57,9 +57,9 @@ final class AudioDuckingRecoveryCoordinator {
               let current = output.readNamed(deviceID: plan.snapshot.deviceID),
               current == plan.snapshot else { state = .incomplete; return }
         do {
-            try journal.write(plan.record.replacing(phase: .writeIntent, intended: plan.record.baseline))
+            try journal.writeOwned(plan.record.replacing(phase: .writeIntent, intended: plan.record.baseline))
             guard allowed() else {
-                try journal.write(plan.record)
+                try journal.writeOwned(plan.record)
                 state = .incomplete
                 return
             }
@@ -68,7 +68,7 @@ final class AudioDuckingRecoveryCoordinator {
                                         value: plan.record.baseline[0], expected: current)
             }) {
             case .notAttempted:
-                try journal.write(plan.record)
+                try journal.writeOwned(plan.record)
                 state = .incomplete
             case .attempted(false):
                 unsettledDeviceUID = plan.record.deviceUID
@@ -91,7 +91,7 @@ final class AudioDuckingRecoveryCoordinator {
             return
         }
         do {
-            try journal.write(plan.record.replacing(phase: .restored, confirmed: current.values))
+            try journal.writeOwned(plan.record.replacing(phase: .restored, confirmed: current.values))
             try journal.clear()
             unsettledDeviceUID = nil
             state = .idle

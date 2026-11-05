@@ -101,6 +101,13 @@ final class AudioDuckingRuntime {
         let deadline: TimeInterval
     }
     private var pendingWrite: PendingWrite?
+    private struct AsyncFrame {
+        let token: AudioDuckingLease.Token
+        let transition: AudioDuckingTransition
+        let values: [Float]
+    }
+    private var asyncFrame: AsyncFrame?
+    private(set) var transitionSettled = false
     private var pendingRetainedPercent: Double?
     private(set) var manualAdjustment: (id: UUID, uid: String, percent: Double)?
 
@@ -113,6 +120,8 @@ final class AudioDuckingRuntime {
         do { try persist(.confirmed, snapshot: current, baseline: baseline) }
         catch { failureReason = "journal_confirm_failed"; unresolvedWrite = true; cleanupUnsafe = true; relinquish(token: token, incomplete: true); return true }
         guard lease.adoptUserLevel(current.values, token: token) else { return false }
+        asyncFrame = nil
+        transitionSettled = true
         // The owner explicitly defines manual volume changes during recording
         // as a retained-level adjustment; the original baseline is preserved.
         guard ledger.adoptUserLevel(current.values) else { return false }
@@ -150,7 +159,7 @@ final class AudioDuckingRuntime {
             elements: snapshot.elements, stereoChannels: snapshot.stereoChannels, channelLayout: snapshot.channelLayout,
             balance: snapshot.balance, muted: snapshot.muted, baseline: baseline, confirmed: snapshot.values,
             phase: phase, intended: intended)
-        try journal.write(record)
+        try journal.writeOwned(record)
     }
 
     @discardableResult
@@ -160,6 +169,8 @@ final class AudioDuckingRuntime {
         guard !unresolvedWrite, pendingWrite == nil else { status = .incomplete; return nil }
         failureReason = "none"
         failureLevels = nil
+        asyncFrame = nil
+        transitionSettled = false
         guard desired.isValid else { status = .unavailable; return nil }
         let inherited = hasOwnershipCycle
         if !inherited, ownership != nil, let old = lease.token { clear(token: old) }
@@ -202,6 +213,8 @@ final class AudioDuckingRuntime {
         let expected = lease.lastConfirmed ?? initial.values
         guard AudioDuckingOutputSnapshot.levelsMatch(current.values, expected) else { relinquish(token: token, incomplete: ownership != nil); return }
         guard lease.activate(token, values: current.values, config: config, now: now) else { return }
+        asyncFrame = nil
+        transitionSettled = false
         if ownership == nil { ownership = AudioDuckingControlOwnership(baseline: initial.values) }
         tick(token: token, now: now)
     }
@@ -220,6 +233,7 @@ final class AudioDuckingRuntime {
             _ = adoptUserLevel(current, token: token)
         }
         lease.end(token, config: config, now: now)
+        transitionSettled = false
         if lease.restoring { status = .restoring }
         else if ownership == nil { clear(token: token) }
     }
@@ -230,13 +244,18 @@ final class AudioDuckingRuntime {
         guard token == lease.token, !lease.suppressed, !lease.ended, !lease.restoring,
               now.isFinite, percent.isFinite, (0...100).contains(percent),
               var config = effectiveConfiguration, config.mode == .duck else { return }
-        if pendingWrite != nil { pendingRetainedPercent = percent; return }
+        if pendingWrite != nil || asyncFrame.map({ !AudioDuckingOutputSnapshot.levelsMatch(lease.lastConfirmed ?? [], $0.values) }) == true {
+            pendingRetainedPercent = percent
+            return
+        }
+        asyncFrame = nil
         config.retainedPercent = percent
         effectiveConfiguration = config
         guard lease.baseline != nil, let initial = beginSnapshot,
               let current = output.readDefault(), current.hasSameControls(as: initial),
               current.muted == initial.muted, lease.lastConfirmed.map({ AudioDuckingOutputSnapshot.levelsMatch(current.values, $0) }) == true else { return }
         if lease.activate(token, values: current.values, config: config, now: now) {
+            transitionSettled = false
             tick(token: token, now: now)
         }
     }
@@ -273,11 +292,34 @@ final class AudioDuckingRuntime {
             relinquish(token: token, incomplete: true)
             return
         }
-        if lease.restoring, lease.transition == nil {
-            guard lease.prepareRestore(token, current: current.values, config: config, now: now) else { return }
+        let transition: AudioDuckingTransition
+        let targets: [Float]
+        if output.requiresWriteNotification, let frame = asyncFrame, frame.token == token,
+           !AudioDuckingOutputSnapshot.levelsMatch(current.values, frame.values) {
+            // Complete the sampled pair before advancing time, retargeting, or
+            // preparing restoration from a partially changed stereo level.
+            transition = frame.transition
+            targets = frame.values
+        } else {
+            asyncFrame = nil
+            if lease.restoring, lease.transition == nil {
+                guard lease.prepareRestore(token, current: current.values, config: config, now: now) else { return }
+            }
+            guard let active = lease.transition else { return }
+            transition = active
+            let sampled = active.values(at: now)
+            if output.requiresWriteNotification {
+                let converted = sampled.indices.compactMap { index in
+                    output.canonicalTarget(deviceID: initial.deviceID, element: initial.elements[index], value: sampled[index])
+                }
+                guard converted.count == sampled.count, converted.allSatisfy({ $0.isFinite && (0...1).contains($0) }) else {
+                    failureReason = "target_conversion_failed"
+                    relinquish(token: token, incomplete: hasOwnershipCycle); return
+                }
+                targets = converted
+                asyncFrame = AsyncFrame(token: token, transition: active, values: converted)
+            } else { targets = sampled }
         }
-        guard let transition = lease.transition else { return }
-        let targets = transition.values(at: now)
         var observed = current
         for index in targets.indices {
             guard token == lease.token, !lease.suppressed, normalWriteAllowed(token) else { return }
@@ -362,7 +404,9 @@ final class AudioDuckingRuntime {
             observed = next
             lease.confirm(observed.values, token: token)
         }
-        if lease.restoring && transition.isComplete(at: now) {
+        asyncFrame = nil
+        transitionSettled = transition.isComplete(at: now)
+        if lease.restoring && transitionSettled {
             // A quantized control is complete only if readback reached baseline;
             // otherwise leave the remaining obligation visible, never invent it.
             if zip(observed.values, ledger.baseline).allSatisfy({ pair in sameScalar(pair.0, pair.1) }) {
@@ -460,8 +504,10 @@ final class AudioDuckingRuntime {
         ledger.recordWrite(index: pending.index, before: pending.before.values[pending.index], reportedSuccess: true, readback: current.values[pending.index])
         ownership = ledger
         lease.confirm(current.values, token: token)
-        if let percent = pendingRetainedPercent {
+        if let percent = pendingRetainedPercent,
+           asyncFrame.map({ AudioDuckingOutputSnapshot.levelsMatch(current.values, $0.values) }) ?? true {
             pendingRetainedPercent = nil
+            asyncFrame = nil
             updateRetainedPercent(percent, token: token, now: now)
             return
         }
@@ -493,6 +539,7 @@ final class AudioDuckingRuntime {
 
     private func relinquish(token: AudioDuckingLease.Token, incomplete: Bool) {
         guard token == lease.token else { return }
+        asyncFrame = nil
         pendingRetainedPercent = nil
         if pendingWrite != nil {
             pendingWrite = nil
