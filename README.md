@@ -1,6 +1,6 @@
 # VoiceInk Personal
 
-A personal fork of [Beingpax/VoiceInk](https://github.com/Beingpax/VoiceInk), with smooth audio ducking during dictation, per-output background levels and restoration of the original volume. The first personal release is based on the owner-tested `78cdb94d7c8875687124421adc667c9dbbd8de2b` application, with an explicit recovery-reset fix found during release review.
+A personal fork of [Beingpax/VoiceInk](https://github.com/Beingpax/VoiceInk), with smooth audio ducking during dictation, per-output background levels and restoration of the original volume. The first personal release is based on the owner-tested `78cdb94d7c8875687124421adc667c9dbbd8de2b` application, with recovery and lifecycle ordering fixes found during release review.
 
 **[Download the ready-to-use application](https://github.com/legrch/VoiceInk/releases/latest)** · Apple Silicon (M1 or later) · macOS 15+
 
@@ -16,28 +16,32 @@ No Xcode, Git, patches or signing certificate are needed to install a release.
 
 ### Optional terminal installer
 
-The installer downloads the pinned release, checks its SHA-256 and signing certificate, makes a backup, and installs without launching. It supports first installation and upgrades. The command pins the installer source commit and checks its SHA-256 before executing:
+For either first installation or replacement, quit VoiceInk and copy the whole block below. The installer downloads the pinned release, checks its SHA-256 and signing certificate, makes a backup, and installs without launching. It supports first installation and upgrades. The command pins the installer source commit and checks its SHA-256 before executing:
 
 ```bash
 voiceink_installer=$(mktemp /tmp/voiceink-personal-install.XXXXXXXX)
 curl --fail --location --proto '=https' --proto-redir '=https' \
-  https://raw.githubusercontent.com/legrch/VoiceInk/c52a2b35081d2141e34e5dd560b9460379a9b2ac/scripts/install.sh \
+  https://raw.githubusercontent.com/legrch/VoiceInk/fc17a20231aef730375af1bc5bc68ee922947ec3/scripts/install.sh \
   -o "$voiceink_installer" &&
-printf 'a40c323b23289bea9c059e328f46685ba76f9c0e1c803a9d7faaab3690f1c9c1  %s\n' "$voiceink_installer" | shasum -a 256 -c - &&
-bash "$voiceink_installer"
+printf 'a6b56a0bd3951683060c5dc49bc9ca862af685752bea18a0b200a46630d4aeaf  %s\n' "$voiceink_installer" | shasum -a 256 -c - &&
+bash "$voiceink_installer" --version latest --replace-existing
 ```
 
-If replacing an official or differently signed VoiceInk, explicitly approve the migration with `bash "$voiceink_installer" --replace-existing`. macOS may ask for permissions again. Do not use sudo. An unwritable Applications directory can be avoided with `--destination "$HOME/Applications/VoiceInk.app"` after creating that directory; custom destinations keep app-only backups beside the app.
+`--version latest` selects the newest release pinned by this installer; `--version personal-2.25.1` selects it explicitly. Unsupported versions fail before changing anything. Use the current command from this page for a later release; the pinned installer never silently trusts new remote hashes.
 
-Default-location backups are under `~/Library/Application Support/VoiceInk-Personal-Backups/release.*`, including the previous app (when present), application support and preferences. Failed replacement attempts restore the original app or preserve the exact recovery staging path. For a manual rollback, quit VoiceInk, move the new app aside and copy the backed-up `VoiceInk.app` into Applications. Normal installation does not modify user data; retain the data backup if a later app launch migrates it.
+Keep VoiceInk closed until installation finishes. The command explicitly permits replacement of an existing signed VoiceInk and backs it up; omit `--replace-existing` to refuse migration from a different certificate. macOS may ask for permissions again. Do not use sudo. An unwritable Applications directory can be avoided with `--destination "$HOME/Applications/VoiceInk.app"` after creating that directory; custom destinations keep app-only backups beside the app.
+
+Default-location backups are under `~/Library/Application Support/VoiceInk-Personal-Backups/release.*`, including the previous app (when present), application support, custom recording sounds and preferences. Failed replacement attempts restore the original app or preserve the exact recovery staging path. For a manual rollback, quit VoiceInk, move the new app aside and copy the backed-up `VoiceInk.app` into Applications. Normal installation does not modify user data; retain the data backup if a later app launch migrates it.
 
 ## Set up audio ducking
 
 In **Audio > Audio Ducking**, enable **Lower Audio While Recording**. Turn off **Pause Media While Recording** and **Mute Audio While Recording** to keep music playing. Set **Volume During Recording** and **Fade Duration**. Levels are remembered per output device. **Current Volume** is read-only; **Volume Before Recording** captures the original level. Test a short dictation with music before relying on a new audio device. Outputs without volume controls are unsupported.
 
+The installer does not create a profile or launch the app. VoiceInk creates its own profile during first launch; macOS permissions and model/provider selection use the normal setup screens.
+
 The package does not include anyone's settings, API keys, transcription models or machine-specific Karabiner mappings. Choose your own shortcut in VoiceInk. Automatic updates are disabled; install subsequent personal releases explicitly. Intel builds are not provided in this release.
 
-If ducking pauses after an interruption, first set a comfortable system volume, then turn **Lower Audio While Recording** off and on. This explicitly archives the current output's recovery evidence and enables a fresh session without changing volume or claiming an old write was confirmed/cancelled. A live pending write, unavailable output or unreadable evidence keeps the reset blocked.
+If ducking pauses after an interruption, first set a comfortable system volume, then turn **Lower Audio While Recording** off and on. This explicitly archives the current output's recovery evidence and enables a fresh session without changing volume or claiming an old write was confirmed/cancelled. A current-process unsettled write stays blocked for that output even after a timeout or device switch; resetting does not erase that quarantine. Quit VoiceInk, set a comfortable volume and reopen it before explicitly acknowledging historical evidence. Restarting does not prove an old hardware effect was cancelled. Unavailable output or unreadable evidence also keeps reset blocked.
 
 ## Upstream 2.25 compatibility notes
 
