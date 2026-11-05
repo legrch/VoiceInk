@@ -109,3 +109,19 @@ struct AudioDuckingLease {
         restoring = false
     }
 }
+
+/// Legacy mute responsibility survives waiter cancellation and mode changes.
+/// A recovery block may prevent a new mute but cannot discard an owned unmute.
+struct RecordingMuteOwnership {
+    private var sessionID: UUID?
+    private var devices: Set<UInt32> = []
+    var hasDevices: Bool { !devices.isEmpty }
+
+    mutating func begin(_ sessionID: UUID) { self.sessionID = sessionID }
+    mutating func recordMuted(_ device: UInt32) { devices.insert(device) }
+    func restorationDevices(for sessionID: UUID, cancelled: Bool) -> [UInt32] {
+        guard self.sessionID == sessionID, !cancelled else { return [] }
+        return Array(devices)
+    }
+    mutating func didRestore(_ device: UInt32) { devices.remove(device) }
+}

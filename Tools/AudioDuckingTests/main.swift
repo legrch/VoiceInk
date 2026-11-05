@@ -1049,3 +1049,27 @@ coordinator.prepare(continuousOwnership: true)
 coordinator.issue(now: 50)
 check(recoveryOutput.writes.count == pendingRecoveryWrites, "unsettled named recovery cannot be reissued by prepare")
 print("Named recovery final admission and no-reissue checks passed")
+
+// A quarantine/mode change must not strand a previous legacy mute when a new
+// recording cancels the old delayed waiter. The production controller uses this
+// ledger independently of the selected mode and keeps failed restores owned.
+var inheritedMute = RecordingMuteOwnership()
+let muteSessionA = UUID()
+let muteSessionB = UUID()
+inheritedMute.begin(muteSessionA)
+inheritedMute.recordMuted(7)
+check(inheritedMute.restorationDevices(for: muteSessionA, cancelled: false) == [7], "owned mute has restoration responsibility")
+inheritedMute.begin(muteSessionB)
+check(inheritedMute.restorationDevices(for: muteSessionA, cancelled: false).isEmpty,
+      "cancelled/superseded waiter cannot restore over the new recording")
+check(inheritedMute.hasDevices && inheritedMute.restorationDevices(for: muteSessionB, cancelled: true).isEmpty,
+      "cancellation retains responsibility rather than dropping the owned mute")
+check(inheritedMute.restorationDevices(for: muteSessionB, cancelled: false) == [7],
+      "new recording restores inherited mute even when quarantine selects unchanged mode")
+// A failed hardware restore deliberately does not call didRestore.
+check(inheritedMute.restorationDevices(for: muteSessionB, cancelled: false) == [7], "failed unmute remains retryable by its owner")
+inheritedMute.didRestore(7)
+check(!inheritedMute.hasDevices, "confirmed unmute releases only its recorded device")
+check(inheritedMute.restorationDevices(for: muteSessionB, cancelled: false).isEmpty,
+      "a device muted before ownership was acquired is never unmuted")
+print("Legacy mute cancellation and mode-independent restoration checks passed")

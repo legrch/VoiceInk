@@ -101,7 +101,7 @@ class VoiceInkEngine: NSObject, ObservableObject {
     @Published var shouldCancelRecording = false
     private var pipelineWorkDepth = 0
     private var resourceCleanupDepth = 0
-    private var isRecordingStartBlocked: Bool { pipelineWorkDepth > 0 || resourceCleanupDepth > 0 }
+    var isRecordingStartBlocked: Bool { pipelineWorkDepth > 0 || resourceCleanupDepth > 0 }
     @Published var partialTranscript: String = ""
     var currentSession: TranscriptionSession?
     private var currentSessionTranscriptionConfiguration: TranscriptionRuntimeConfiguration?

@@ -21,7 +21,7 @@ final class MediaController: ObservableObject {
     private var effectiveMode: AudioDuckingConfiguration.Mode = .unchanged
 
     var duckingConfigurationPending: Bool {
-        if let effective = duckingService?.effectiveConfiguration, duckingService?.hasOwnershipCycle == true {
+        if let effective = duckingService?.effectiveConfiguration {
             var desired = duckingSettings.configuration
             // Retained level is applied live; other fields take effect after
             // the current ownership cycle is finished.
@@ -29,11 +29,11 @@ final class MediaController: ObservableObject {
             desired.retainedPercentByDevice = effective.retainedPercentByDevice
             return effective != desired
         }
-        return !mutedDevices.isEmpty && duckingSettings.configuration.mode != .mute
+        return muteOwnership.hasDevices && duckingSettings.configuration.mode != .mute
     }
 
     // Keep responsibility across rapid recordings, including output-device changes.
-    private var mutedDevices: Set<AudioDeviceID> = []
+    private var muteOwnership = RecordingMuteOwnership()
     private var recordingSessionID = UUID()
 
     @Published var isSystemMuteEnabled: Bool = UserDefaults.standard.bool(forKey: "isSystemMuteEnabled") {
@@ -81,6 +81,7 @@ final class MediaController: ObservableObject {
     func beginRecordingSession(sessionID: UUID) {
         // Invalidate delayed restoration before the recorder's 220 ms mute delay.
         recordingSessionID = sessionID
+        muteOwnership.begin(sessionID)
         duckingService?.captureRecordingVolume()
         let desired = duckingSettings.configuration
         if duckingService?.isQuarantined == true {
@@ -89,7 +90,7 @@ final class MediaController: ObservableObject {
             effectiveMode = .unchanged
         } else if duckingService?.hasOwnershipCycle == true {
             effectiveMode = .duck
-        } else if !mutedDevices.isEmpty {
+        } else if muteOwnership.hasDevices {
             effectiveMode = .mute
         } else {
             effectiveMode = desired.mode
@@ -144,18 +145,18 @@ final class MediaController: ObservableObject {
             return false
         }
         objectWillChange.send()
-        mutedDevices.insert(deviceID)
+        muteOwnership.recordMuted(deviceID)
         return true
     }
 
     func unmuteSystemAudio(sessionID: UUID) async {
         guard sessionID == recordingSessionID, !Task.isCancelled else { return }
-        if effectiveMode == .duck {
-            guard let duckingToken else { return }
+        if effectiveMode == .duck, let duckingToken {
             duckingService?.end(token: duckingToken)
-            return
         }
-        guard effectiveMode == .mute, !mutedDevices.isEmpty else { return }
+        // Restoration follows actual mute ownership, never the newly selected
+        // mode. Quarantine prevents new effects but does not erase this duty.
+        guard muteOwnership.hasDevices else { return }
         let delay = audioResumptionDelay
         let delayNanoseconds = AudioDelay.restorationNanoseconds(delay)
         if delayNanoseconds > 0 {
@@ -169,10 +170,10 @@ final class MediaController: ObservableObject {
 
         // Restore the devices we actually muted, rather than the current default.
         // Restore ownership even if the preference was disabled during recording.
-        for deviceID in Array(mutedDevices) {
+        for deviceID in muteOwnership.restorationDevices(for: sessionID, cancelled: Task.isCancelled) {
             if setSystemMuted(false, deviceID: deviceID) {
                 objectWillChange.send()
-                mutedDevices.remove(deviceID)
+                muteOwnership.didRestore(deviceID)
             }
         }
     }
