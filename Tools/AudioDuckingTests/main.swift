@@ -1189,3 +1189,23 @@ driveAsyncTransition(stoppedRuntime, stoppedStereo, token: stoppedToken, untilId
 check(stoppedStereo.devices[1]!.values == [0.6, 0.3], "Stop during a sampled pair still restores the original baseline")
 checkStereoFrames(stoppedStereo)
 print("Timed stereo frame fairness, live retarget and mid-pair Stop checks passed")
+
+// A queued recovery block also fences a token that was admitted earlier.
+let recoveryBlockedOutput = makeOutput([0.6])
+recoveryBlockedOutput.requiresWriteNotification = true
+recoveryBlockedOutput.deferWrites = true
+var queuedRecoveryBlock = false
+let blockedRuntime = AudioDuckingRuntime(output: recoveryBlockedOutput,
+    normalWriteAllowed: { _ in !queuedRecoveryBlock },
+    writeAdmission: { _, operation in queuedRecoveryBlock ? .notAttempted : operation() })
+let blockedToken = blockedRuntime.begin(sessionID: UUID(), desired: runtimeConfig)!
+blockedRuntime.activate(token: blockedToken, now: 0)
+recoveryBlockedOutput.deliverPendingWrite()
+blockedRuntime.volumeChanged(token: blockedToken, now: 0.1)
+let writesBeforeRecoveryBlock = recoveryBlockedOutput.writes.count
+blockedRuntime.end(token: blockedToken, now: 0.2)
+queuedRecoveryBlock = true
+blockedRuntime.tick(token: blockedToken, now: 10)
+check(recoveryBlockedOutput.writes.count == writesBeforeRecoveryBlock,
+      "recovery blocking after admission denies future restoration writes without revoking a newer token")
+print("Queued recovery-block write fencing check passed")

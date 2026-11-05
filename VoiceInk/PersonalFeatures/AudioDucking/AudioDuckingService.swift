@@ -59,14 +59,12 @@ final class AudioDuckingService {
 
     init(statusChanged: @escaping (AudioDuckingRuntime.Status) -> Void = { _ in }) {
         self.statusChanged = statusChanged
-        let eventLatch = latch
         let output = AudioDuckingCoreAudio()
         do {
             let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             journal = try AudioDuckingRecoveryJournal(directory: base.appendingPathComponent("com.prakashjoshipax.VoiceInk/PersonalAudioDucking", isDirectory: true))
         } catch { recoveryBlocked = true }
-        runtime = AudioDuckingRuntime(output: output, journal: journal, normalWriteAllowed: { eventLatch.permits($0) },
-            writeAdmission: { token, operation in eventLatch.performWrite(ifCurrent: token, operation) })
+        runtime = makeRuntime(output: output)
         if let journal {
             recovery = AudioDuckingRecoveryCoordinator(journal: journal, output: output, resolve: { output.device(forUID: $0) })
         }
@@ -88,6 +86,19 @@ final class AudioDuckingService {
             forName: NSApplication.willTerminateNotification, object: nil, queue: nil
         ) { [weak self] _ in self?.terminate() }
         queue.async { [weak self] in self?.startRecovery() }
+    }
+
+    /// Every replacement runtime shares both lifecycle and queued recovery gates.
+    /// recoveryBlocked is queue-confined; callbacks advance the event latch.
+    private func makeRuntime(output: AudioDuckingCoreAudio) -> AudioDuckingRuntime {
+        let eventLatch = latch
+        return AudioDuckingRuntime(output: output, journal: journal,
+            normalWriteAllowed: { [weak self] token in
+                self?.recoveryBlocked == false && eventLatch.permits(token)
+            }, writeAdmission: { [weak self] token, operation in
+                guard self?.recoveryBlocked == false else { return .notAttempted }
+                return eventLatch.performWrite(ifCurrent: token, operation)
+            })
     }
 
     var effectiveConfiguration: AudioDuckingConfiguration? {
@@ -159,10 +170,7 @@ final class AudioDuckingService {
                 recoveryTimer?.cancel(); recoveryTimer = nil
                 if let token = runtime.lease.token { _ = latch.invalidate(ifCurrent: token); latch.clear(token) }
                 removeDeviceListeners()
-                let eventLatch = latch
-                runtime = AudioDuckingRuntime(output: output, journal: journal,
-                    normalWriteAllowed: { eventLatch.permits($0) },
-            writeAdmission: { token, operation in eventLatch.performWrite(ifCurrent: token, operation) })
+                runtime = makeRuntime(output: output)
                 recoveryBlocked = false
                 recoveryContinuityLost = false
                 lastReportedStatus = nil
@@ -627,10 +635,7 @@ final class AudioDuckingService {
             timer?.cancel(); timer = nil
             if let token = runtime.lease.token { _ = latch.invalidate(ifCurrent: token); latch.clear(token) }
             removeDeviceListeners()
-            let eventLatch = latch
-            runtime = AudioDuckingRuntime(output: AudioDuckingCoreAudio(), journal: journal,
-                normalWriteAllowed: { eventLatch.permits($0) },
-            writeAdmission: { token, operation in eventLatch.performWrite(ifCurrent: token, operation) })
+            runtime = makeRuntime(output: AudioDuckingCoreAudio())
             recoveryBlocked = false
             recoveryContinuityLost = false
             return true
