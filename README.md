@@ -16,13 +16,14 @@ No Xcode, Git, patches or signing certificate are needed to install a release.
 
 ### Optional terminal installer
 
-The installer downloads the pinned release, checks its SHA-256 and signing certificate, makes a backup, and installs without launching. It supports first installation and upgrades. Download it before executing:
+The installer downloads the pinned release, checks its SHA-256 and signing certificate, makes a backup, and installs without launching. It supports first installation and upgrades. The command pins the installer source commit and checks its SHA-256 before executing:
 
 ```bash
 voiceink_installer=$(mktemp /tmp/voiceink-personal-install.XXXXXXXX)
 curl --fail --location --proto '=https' --proto-redir '=https' \
-  https://github.com/legrch/VoiceInk/releases/download/personal-2.25.1/install.sh \
+  https://raw.githubusercontent.com/legrch/VoiceInk/c52a2b35081d2141e34e5dd560b9460379a9b2ac/scripts/install.sh \
   -o "$voiceink_installer" &&
+printf 'a40c323b23289bea9c059e328f46685ba76f9c0e1c803a9d7faaab3690f1c9c1  %s\n' "$voiceink_installer" | shasum -a 256 -c - &&
 bash "$voiceink_installer"
 ```
 
