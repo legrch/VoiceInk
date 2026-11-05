@@ -130,8 +130,9 @@ class Recorder: NSObject, ObservableObject {
         audioRestorationTask?.cancel()
         audioRestorationTask = Task {
             if let playbackSessionID {
-                await mediaController.unmuteSystemAudio(sessionID: playbackSessionID)
-                await playbackController.resumeMedia(sessionID: playbackSessionID)
+                async let output: Void = mediaController.unmuteSystemAudio(sessionID: playbackSessionID)
+                async let playback: Void = playbackController.resumeMedia(sessionID: playbackSessionID)
+                _ = await (output, playback)
             }
         }
         deviceManager.recordingDidStop()

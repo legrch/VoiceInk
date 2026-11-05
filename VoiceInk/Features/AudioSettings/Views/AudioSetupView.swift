@@ -1,10 +1,12 @@
 import CoreAudio
+import Combine
 import SwiftUI
 
 @MainActor
 struct AudioSetupView: View {
     @ObservedObject private var audioDeviceManager = AudioDeviceManager.shared
     @ObservedObject private var mediaController = MediaController.shared
+    @ObservedObject private var duckingSettings = MediaController.shared.duckingSettings
     @ObservedObject private var playbackController = PlaybackController.shared
     @State private var microphoneSourceBeforePriorityOrder: MicrophoneSourceSelection = .systemDefault
     @State private var refreshIconRotation = 0.0
@@ -32,8 +34,7 @@ struct AudioSetupView: View {
             }
 
             Section {
-                Toggle("Mute Audio While Recording", isOn: $mediaController.isSystemMuteEnabled)
-
+                Toggle("Mute Audio While Recording", isOn: muteEnabled)
                 Toggle("Pause Media While Recording", isOn: $playbackController.isPauseMediaEnabled)
 
                 LabeledContent("Resume Delay") {
@@ -44,13 +45,138 @@ struct AudioSetupView: View {
             } header: {
                 Text("Recording Behavior")
             }
+
+            Section {
+                Toggle("Lower Audio While Recording", isOn: duckingEnabled)
+                if mediaController.duckingQuarantined || mediaController.canAcknowledgeDuckingRecovery {
+                    Text(mediaController.canAcknowledgeDuckingRecovery
+                        ? "Check system volume, then switch this off and on to reset."
+                        : "An audio change is unresolved. Quit VoiceInk, check system volume, then reopen it.")
+                        .foregroundStyle(.secondary)
+                        .help("Reset archives recovery evidence without changing volume. It does not cancel a previously pending system change.")
+                }
+
+                if duckingSettings.configuration.mode == .duck {
+                    if let name = mediaController.audioOutputName {
+                        LabeledContent("Current Output", value: name)
+                    }
+                    if let original = mediaController.outputRestoreVolumePercent {
+                        LabeledContent("Volume Before Recording", value: "\(Int(original.rounded())) %")
+                    }
+                    volumeRow("Current Volume") {
+                        Slider(value: .constant(mediaController.currentOutputVolumePercent ?? 0), in: 0...100)
+                            .disabled(true)
+                            .accessibilityLabel("Current volume, read only")
+                        Text(mediaController.currentOutputMuted ? "Muted" : mediaController.currentOutputVolumePercent.map { "\(Int($0.rounded())) %" } ?? "—")
+                            .monospacedDigit()
+                            .frame(width: 55, alignment: .trailing)
+                    }
+                    volumeRow("Volume During Recording") {
+                        Slider(value: deviceRetainedPercent, in: 0...100, step: 1)
+                            .accessibilityLabel("Volume during recording percent")
+                        TextField("", value: deviceRetainedPercent, format: .number.precision(.fractionLength(0)))
+                            .frame(width: 37)
+                            .multilineTextAlignment(.trailing)
+                            .accessibilityLabel("Retained volume percent")
+                        Text("%").frame(width: 14)
+                    }
+                    duckingSeconds("Fade Duration", keyPath: \.fadeDownSeconds)
+                    duckingSeconds("Delay Before Restoring", keyPath: \.restoreDelaySeconds)
+                    if playbackController.isPauseMediaEnabled {
+                        Text("Turn off Pause Media While Recording to keep music playing during dictation.")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if duckingSettings.invalidStoredConfiguration {
+                    Text("Saved audio settings could not be read. Audio is unchanged until you choose new settings.")
+                        .foregroundStyle(.orange)
+                }
+                if mediaController.duckingConfigurationPending {
+                    Text("Audio changes take effect after the current restoration finishes.")
+                        .foregroundStyle(.secondary)
+                }
+                if mediaController.duckingStatus == .unavailable {
+                    Text("Audio ducking is unavailable for the current output.")
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Audio Ducking")
+            }
         }
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)
+        .onReceive(Timer.publish(every: 0.3, on: .main, in: .common).autoconnect()) { _ in
+            mediaController.refreshOutputVolume()
+        }
         .onAppear {
+            mediaController.refreshOutputVolume()
             if !usesPriorityOrder {
                 microphoneSourceBeforePriorityOrder = currentMicrophoneSource
             }
+        }
+    }
+
+    private func volumeRow<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        HStack(spacing: 12) {
+            Text(title).frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 4, content: content)
+                .frame(width: 290)
+        }
+    }
+
+    private func setAudioMode(_ mode: AudioDuckingConfiguration.Mode) {
+        var value = duckingSettings.configuration
+        value.mode = mode
+        if duckingSettings.set(value) {
+            mediaController.isSystemMuteEnabled = mode == .mute
+        }
+    }
+
+    private var duckingEnabled: Binding<Bool> {
+        Binding(get: { duckingSettings.configuration.mode == .duck }, set: { enabled in
+            if enabled {
+                if mediaController.duckingQuarantined || mediaController.canAcknowledgeDuckingRecovery {
+                    guard mediaController.acknowledgeDuckingRecovery(reason: .userReenabledDucking) else { return }
+                }
+                setAudioMode(.duck)
+            } else if duckingSettings.configuration.mode == .duck { setAudioMode(.unchanged) }
+        })
+    }
+
+    private var muteEnabled: Binding<Bool> {
+        Binding(get: { duckingSettings.configuration.mode == .mute }, set: { enabled in
+            if enabled { setAudioMode(.mute) }
+            else if duckingSettings.configuration.mode == .mute { setAudioMode(.unchanged) }
+        })
+    }
+
+    private func duckingValue(_ keyPath: WritableKeyPath<AudioDuckingConfiguration, Double>) -> Binding<Double> {
+        Binding(get: { duckingSettings.configuration[keyPath: keyPath] }, set: { newValue in
+            var value = duckingSettings.configuration
+            value[keyPath: keyPath] = newValue
+            duckingSettings.set(value)
+        })
+    }
+
+    private var deviceRetainedPercent: Binding<Double> {
+        Binding(get: { duckingSettings.configuration.retainedPercent(for: mediaController.audioOutputUID) }, set: { newValue in
+            var value = duckingSettings.configuration
+            value.setRetainedPercent(newValue.rounded(), for: mediaController.audioOutputUID)
+            if duckingSettings.set(value) { mediaController.updateDuckingLevel(newValue) }
+        })
+    }
+
+    private func duckingSeconds(_ title: LocalizedStringKey, keyPath: WritableKeyPath<AudioDuckingConfiguration, Double>) -> some View {
+        HStack {
+            Text(title)
+            Spacer()
+            TextField("", value: duckingValue(keyPath), format: .number.precision(.fractionLength(1)))
+                .frame(width: 55)
+                .accessibilityLabel(title)
+            Stepper("Seconds", value: duckingValue(keyPath), in: 0...10, step: 0.1)
+                .labelsHidden()
+            Text("s")
         }
     }
 
@@ -303,7 +429,7 @@ struct AudioSetupView: View {
     }
 
     private var canEditResumeDelay: Bool {
-        mediaController.isSystemMuteEnabled || playbackController.isPauseMediaEnabled
+        duckingSettings.configuration.mode == .mute || playbackController.isPauseMediaEnabled
     }
 
     private func movePrioritizedDeviceUp(_ device: PrioritizedDevice) {

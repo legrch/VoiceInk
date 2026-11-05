@@ -178,9 +178,10 @@ class ImportExportService {
             isAudioCleanupEnabled: UserDefaults.standard.bool(forKey: CleanupSettingsKeys.isAudioCleanupEnabled),
             audioRetentionPeriod: UserDefaults.standard.integer(forKey: CleanupSettingsKeys.audioRetentionPeriod),
 
-            isSystemMuteEnabled: mediaController.isSystemMuteEnabled,
+            isSystemMuteEnabled: mediaController.duckingSettings.configuration.mode == .mute,
             isPauseMediaEnabled: playbackController.isPauseMediaEnabled,
             audioResumptionDelay: mediaController.audioResumptionDelay,
+            audioDucking: .valid(mediaController.duckingSettings.configuration),
             isTextFormattingEnabled: UserDefaults.standard.bool(forKey: keyIsTextFormattingEnabled),
             isExperimentalFeaturesEnabled: UserDefaults.standard.bool(forKey: "isExperimentalFeaturesEnabled"),
             restoreClipboardAfterPaste: UserDefaults.standard.bool(forKey: "restoreClipboardAfterPaste"),
@@ -307,7 +308,7 @@ class ImportExportService {
                 return
             }
 
-            try await BackupImporter.apply(
+            let result = try await BackupImporter.apply(
                 backup,
                 categories: selectedCategories,
                 enhancementService: enhancementService,
@@ -320,10 +321,22 @@ class ImportExportService {
                 transcriptionModelManager: transcriptionModelManager
             )
 
-            showImportSuccessAlert(
-                message: String(
+            let rejected = result.rejectedAudioSettings
+            var message: String
+            if rejected.isEmpty {
+                message = String(
                     format: String(localized: "Settings imported successfully from %@.\n\nImported: %@."),
-                    url.lastPathComponent, categorySummary(for: selectedCategories)),
+                    url.lastPathComponent, categorySummary(for: selectedCategories))
+            } else {
+                message = String(
+                    format: String(localized: "Settings were imported from %@ for the selected categories: %@.\n\nThese audio settings were rejected and kept their previous values: %@."),
+                    url.lastPathComponent, categorySummary(for: selectedCategories), rejected.joined(separator: ", "))
+            }
+            if result.audioSettingsPending {
+                message += String(localized: "\n\nAudio changes will take effect after the current restoration finishes.")
+            }
+            showImportSuccessAlert(
+                message: message,
                 needsAPIKeyReminder: needsAPIKeyReminder(for: selectedCategories)
             )
         } catch {
@@ -332,7 +345,7 @@ class ImportExportService {
                 message: String(
                     format: String(
                         localized:
-                            "Error importing settings: %@. The file might be corrupted or not in the correct format."),
+                            "Error importing settings: %@. Some selected settings may already have been applied."),
                     error.localizedDescription))
         }
     }

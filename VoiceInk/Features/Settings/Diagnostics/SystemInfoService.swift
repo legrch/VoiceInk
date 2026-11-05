@@ -49,7 +49,7 @@ final class SystemInfoService {
             RECORDING FEEDBACK:
             Sound Feedback: \(CustomSoundManager.shared.hasAnyRecordingSoundEnabled)
             Pause Media While Recording: \(UserDefaults.standard.bool(forKey: "isPauseMediaEnabled"))
-            Mute Audio While Recording: \(UserDefaults.standard.bool(forKey: "isSystemMuteEnabled"))
+            System Audio While Recording: \(MediaController.shared.duckingSettings.configuration.mode.rawValue)
             Audio Resumption Delay: \(UserDefaults.standard.double(forKey: "audioResumptionDelay"))s
 
             CLIPBOARD & PASTE SETTINGS:

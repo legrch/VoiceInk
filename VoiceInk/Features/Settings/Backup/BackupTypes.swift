@@ -92,6 +92,7 @@ struct GeneralBackup: Codable {
     let isSystemMuteEnabled: Bool?
     let isPauseMediaEnabled: Bool?
     let audioResumptionDelay: Double?
+    @AudioDuckingBackupField var audioDucking: AudioDuckingBackupPayload = .absent
     let isTextFormattingEnabled: Bool?
     let isExperimentalFeaturesEnabled: Bool?
     let restoreClipboardAfterPaste: Bool?
