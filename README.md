@@ -1,4 +1,4 @@
-# VoiceInk
+# VoiceInk Plus
 
 <img src="VoiceInk/Assets.xcassets/AppIcon.appiconset/256-mac.png" alt="VoiceInk" width="96" align="right" />
 
@@ -20,7 +20,7 @@ curl -fsSL https://raw.githubusercontent.com/legrch/VoiceInk/main/scripts/instal
 
 The same command handles first installation and updates. It verifies the pinned installer, release archive and app signature, backs up an existing app and its data, and installs to `/Applications/VoiceInk.app` with rollback on replacement failure. Then open **VoiceInk** from Applications. No Xcode, Git, patches, signing certificate or sudo is needed.
 
-This command trusts the bootstrap script maintained in this fork's `main`; it checks the immutable installation payload before executing it. `latest` currently selects **personal-2.25.1**. Future published releases update the reviewed bootstrap pins, so the command stays the same. To select this release explicitly, replace `latest` with `personal-2.25.1`.
+This command trusts the bootstrap script maintained in this fork's `main`; it checks the immutable installation payload before executing it. `latest` selects **VoiceInk Plus 2.25 · r1** (`plus-v2.25-r1`, build `1001`). Future published releases update the reviewed bootstrap pins, so the command stays the same. To select this release explicitly, replace `latest` with `plus-v2.25-r1`. The historical `personal-2.25.1` remains available by its exact name.
 
 **Apple Silicon (M1 or later), macOS 15+.** This build is locally signed, **not Apple-notarized**. If macOS asks, approve this trusted copy in **System Settings > Privacy & Security > Open Anyway** ([Apple's instructions](https://support.apple.com/en-gb/102445)). First launch uses VoiceInk's normal microphone/Accessibility and model/provider setup. The installer never changes Gatekeeper or creates a personal profile on your behalf.
 
@@ -48,7 +48,7 @@ Canceling a batch transcription can leave recording temporarily unavailable unti
 
 ## Fork development
 
-Maintainers: read [release/version conventions and the upstream update procedure](docs/RELEASING.md) before preparing a release. Future releases will use **VoiceInk Plus**, preserve the upstream version, and add a separate revision such as `plus-v2.25-r1`; the existing `personal-2.25.1` release remains unchanged.
+Maintainers: read [release/version conventions and the upstream update procedure](docs/RELEASING.md) before preparing a release. **VoiceInk Plus** preserves the upstream version and adds a separate revision such as `plus-v2.25-r1`; the existing `personal-2.25.1` release remains unchanged.
 
 - `main` is the stable personal fork; use feature branches and reviewed `--no-ff` merge commits (no squash or rebase merges).
 - `upstream` points to `Beingpax/VoiceInk`; `origin` points to `legrch/VoiceInk`.
@@ -56,6 +56,12 @@ Maintainers: read [release/version conventions and the upstream update procedure
 - `personal/build` retains the original implementation history. `scripts/personal-update.sh` is a legacy **source rebase** helper for that branch, not an end-user updater; it is not the update procedure for stable main.
 - `Tools/AudioDuckingTests/run.sh` runs the audio checks. `scripts/personal-build.sh` builds from source using Xcode and a local signing identity (`VOICEINK_SIGNING_IDENTITY`); it never publishes or installs. The old `personal-install.sh` is a machine-local replacement helper requiring an existing matching certificate. For downloaded releases use `scripts/install-release.sh`; `scripts/install.sh` is its immutable installation payload.
 - The application source and bundled licenses remain available under GPL v3; upstream attribution is retained below. No background update service or release automation is installed.
+
+## Version and release notifications
+
+Open **VoiceInk > About VoiceInk Plus** to see the installed upstream version, Plus revision, build and release tag. **Latest Release** opens this fork's newest published release. For notifications, open [the repository](https://github.com/legrch/VoiceInk), choose **Watch > Custom > Releases**, and save ([GitHub's guide](https://docs.github.com/en/subscriptions-and-notifications/get-started/configuring-notifications)).
+
+Updates are manual: quit VoiceInk and run the same install command again. The app does not download updates in the background or use the upstream Sparkle feed.
 
 ## Credits and license
 

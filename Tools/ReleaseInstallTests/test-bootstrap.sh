@@ -59,6 +59,13 @@ sed -n '2,6p' "$fixture/explicit/invocation" > "$fixture/actual"
 printf '%s\n' --version personal-2.25.1 --replace-existing --destination "$fixture/a directory/VoiceInk.app" > "$fixture/expected"
 cmp "$fixture/actual" "$fixture/expected"
 assert_cleaned explicit
+run_case good plus plus-v2.25-r1
+sed -n '2,6p' "$fixture/plus/invocation" > "$fixture/actual"
+printf '%s\n' --version plus-v2.25-r1 --replace-existing --destination /Applications/VoiceInk.app > "$fixture/expected"
+cmp "$fixture/actual" "$fixture/expected"
+assert_cleaned plus
+rg -q '7852619a59ba84f34e386019c55eaf8fa1ba5eeb' "$fixture/explicit/download"
+! rg -q '7852619a59ba84f34e386019c55eaf8fa1ba5eeb' "$fixture/plus/download"
 for mode in download-failure corrupt payload-failure; do
     expected=1
     [[ "$mode" != download-failure ]] || expected=22

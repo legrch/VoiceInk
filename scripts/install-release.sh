@@ -8,15 +8,15 @@ umask 077
 
 bootstrap_fail() { printf 'Error: %s\n' "$*" >&2; exit 1; }
 bootstrap_usage() {
-    printf '%s\n' 'Usage: install-release.sh [latest|personal-2.25.1] [--destination /path/VoiceInk.app]'
+    printf '%s\n' 'Usage: install-release.sh [latest|plus-v2.25-r1|personal-2.25.1] [--destination /path/VoiceInk.app]'
 }
 install_release() {
     selected=${1-latest}
     [ "$#" -eq 0 ] || shift
     case "$selected" in
         --help|-h) [ "$#" -eq 0 ] || bootstrap_fail 'Unexpected arguments'; bootstrap_usage; return ;;
-        latest|personal-2.25.1) ;;
-        *) bootstrap_fail 'Unknown version. Use latest or personal-2.25.1.' ;;
+        latest|plus-v2.25-r1|personal-2.25.1) ;;
+        *) bootstrap_fail 'Unknown version. Use latest, plus-v2.25-r1 or personal-2.25.1.' ;;
     esac
     destination=/Applications/VoiceInk.app
     destination_seen=false
@@ -30,8 +30,14 @@ install_release() {
     done
     # The underlying installer validates platform, destination, processes and bundle.
     # Updating these two pins is an explicit, reviewed release operation.
-    installer_url=https://raw.githubusercontent.com/legrch/VoiceInk/7852619a59ba84f34e386019c55eaf8fa1ba5eeb/scripts/install.sh
-    installer_sha256=79c58536608561c4b0c22a99f93f1a65e87aace155837b6287cca394556a2751
+    plus_installer_url=https://raw.githubusercontent.com/legrch/VoiceInk/a532b88149da9ebdfb6947a9b4e4291b7691f963/scripts/install.sh
+    plus_installer_sha256=5ad6b2619dad0ca22cf32253669f7fa66d5a1c37eeb85da85fc8c3a09c026745
+    case "$selected" in
+        personal-2.25.1)
+            installer_url=https://raw.githubusercontent.com/legrch/VoiceInk/7852619a59ba84f34e386019c55eaf8fa1ba5eeb/scripts/install.sh
+            installer_sha256=79c58536608561c4b0c22a99f93f1a65e87aace155837b6287cca394556a2751 ;;
+        *) installer_url=$plus_installer_url; installer_sha256=$plus_installer_sha256 ;;
+    esac
     bootstrap_work=$(mktemp -d /private/tmp/voiceink-bootstrap.XXXXXXXX)
     trap 'rm -rf "$bootstrap_work"' 0
     trap 'exit 130' INT
