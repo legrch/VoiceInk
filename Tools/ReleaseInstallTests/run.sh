@@ -18,10 +18,10 @@ if bash -c 'source "$1"; pgrep() { return 0; }; main --archive "$2" --destinatio
     echo 'FAIL: running app allowed at a custom destination' >&2; exit 1
 fi
 [[ ! -e "$target" ]]
-install_fixture --archive "$archive" --destination "$target"
+install_fixture --version latest --archive "$archive" --destination "$target"
 codesign --verify --deep --strict "$target"
 original=$(shasum -a 256 "$target/Contents/MacOS/VoiceInk" | awk '{print $1}')
-install_fixture --archive "$archive" --destination "$target"
+install_fixture --version personal-2.25.1 --archive "$archive" --destination "$target"
 [[ $(find "$test_root/target/VoiceInk-Personal-Backups" -name VoiceInk.app -type d | wc -l | tr -d ' ') == 1 ]]
 if bash -c '
   source "$1"
@@ -57,3 +57,19 @@ fi
 [[ -d "$test_root/target/.voiceink-personal-install.lock" ]]
 rmdir "$test_root/target/.voiceink-personal-install.lock"
 echo 'PASS: simulated process checks, real signed first install, update, backup, injected failure rollback, corrupt archive and lock refusal; no app launched.'
+
+for rejected_args in '--version unknown' '--version' '--version latest --version personal-2.25.1'; do
+    if bash -c 'source "$1"; shift; main "$@"' bash "$installer" $rejected_args --archive "$archive" --destination "$target"; then
+        echo 'FAIL: invalid version request accepted' >&2; exit 1
+    fi
+    [[ $(shasum -a 256 "$target/Contents/MacOS/VoiceInk" | awk '{print $1}') == "$original" ]]
+done
+mkdir -p "$test_root/library/Application Support/com.prakashjoshipax.VoiceInk" "$test_root/library/Application Support/VoiceInk/CustomSounds" "$test_root/library/Preferences" "$test_root/data-backup"
+printf 'database fixture' > "$test_root/library/Application Support/com.prakashjoshipax.VoiceInk/store"
+printf 'sound fixture' > "$test_root/library/Application Support/VoiceInk/CustomSounds/custom.wav"
+printf 'preferences fixture' > "$test_root/library/Preferences/com.prakashjoshipax.VoiceInk.plist"
+bash -c 'source "$1"; backup_user_data "$2" "$3"' bash "$installer" "$test_root/library" "$test_root/data-backup"
+cmp "$test_root/library/Application Support/VoiceInk/CustomSounds/custom.wav" "$test_root/data-backup/CustomSounds/custom.wav"
+cmp "$test_root/library/Application Support/com.prakashjoshipax.VoiceInk/store" "$test_root/data-backup/Application Support/store"
+cmp "$test_root/library/Preferences/com.prakashjoshipax.VoiceInk.plist" "$test_root/data-backup/Preferences.plist"
+echo 'PASS: latest/explicit-version selection, invalid-version refusal and complete Library backup fixtures.'

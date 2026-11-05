@@ -3,23 +3,39 @@
 set -euo pipefail
 VERSION=personal-2.25.1
 ASSET=VoiceInk-Personal-2.25.1-AppleSilicon.zip
-ARCHIVE_SHA256=c089ba44f6c2845c216f41e12f48d86df5800efce85d899fb085abb1997caef8
+ARCHIVE_SHA256=e90267b784f4ed2c0298761d5879fbe8536fad720bcd2e58daa6ce5d70267fdb
 CERT_SHA256=fbb0182020b4091415f9ee73f17b156010daac2291f3f700a85ba4c5d7dbdb89
 BUNDLE_ID=com.prakashjoshipax.VoiceInk
 
 die() { echo "Error: $*" >&2; exit 1; }
+# Explicit source paths keep backup tests isolated from the owner's Library.
+backup_user_data() {
+    local library=$1 backup=$2
+    local support="$library/Application Support/$BUNDLE_ID"
+    local sounds="$library/Application Support/VoiceInk/CustomSounds"
+    local prefs="$library/Preferences/$BUNDLE_ID.plist"
+    [[ ! -d "$support" ]] || ditto "$support" "$backup/Application Support"
+    [[ ! -d "$sounds" ]] || ditto "$sounds" "$backup/CustomSounds"
+    [[ ! -f "$prefs" ]] || ditto "$prefs" "$backup/Preferences.plist"
+}
+
 main() {
     destination=/Applications/VoiceInk.app
-    local archive='' replace=false
+    local archive='' replace=false requested_version=latest version_seen=false
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --destination) [[ $# -ge 2 ]] || die 'Missing destination'; destination=$2; shift 2 ;;
             --archive) [[ $# -ge 2 ]] || die 'Missing archive'; archive=$2; shift 2 ;;
+            --version)
+                [[ $# -ge 2 && "${2:-}" != --* && "$version_seen" == false ]] || die 'Specify --version once, with a value.'
+                requested_version=$2; version_seen=true; shift 2 ;;
             --replace-existing) replace=true; shift ;;
-            --help) echo 'Usage: bash install.sh [--replace-existing] [--archive /path/release.zip] [--destination /path/VoiceInk.app]'; return ;;
+            --help) echo 'Usage: bash install.sh [--version latest|personal-2.25.1] [--replace-existing] [--archive /path/release.zip] [--destination /path/VoiceInk.app]'; return ;;
             *) die "Unknown argument: $1" ;;
         esac
     done
+    [[ "$requested_version" == latest || "$requested_version" == "$VERSION" ]] || die "Unsupported version: $requested_version. Use the installer from the desired release."
+    echo "Selected VoiceInk Personal $VERSION (requested: $requested_version)."
     [[ $(uname -s) == Darwin && $(uname -m) == arm64 ]] || die 'Requires an Apple Silicon Mac.'
     [[ $(sw_vers -productVersion | cut -d. -f1) -ge 15 ]] || die 'Requires macOS 15 or newer.'
     [[ "$destination" == /*/VoiceInk.app && "$destination" != *$'
@@ -98,10 +114,7 @@ main() {
         codesign --verify --deep --strict "$backup/VoiceInk.app"
     fi
     if [[ "$destination" == /Applications/VoiceInk.app ]]; then
-        local support="$HOME/Library/Application Support/$BUNDLE_ID"
-        local prefs="$HOME/Library/Preferences/$BUNDLE_ID.plist"
-        [[ ! -d "$support" ]] || ditto "$support" "$backup/Application Support"
-        [[ ! -f "$prefs" ]] || ditto "$prefs" "$backup/Preferences.plist"
+        backup_user_data "$HOME/Library" "$backup"
     fi
     assert_closed
     stage=$(mktemp -d "$parent/.voiceink-release-stage.XXXXXXXX")
