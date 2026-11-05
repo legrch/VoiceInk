@@ -1,6 +1,16 @@
 import Foundation
 import Darwin
 
+/// Process-lifetime evidence of unsettled setters survives runtime replacement.
+/// User acknowledgment, elapsed time and matching readback cannot clear it.
+struct AudioDuckingUnsettledWrites {
+    private var deviceUIDs: Set<String> = []
+    mutating func retain(_ uid: String?) {
+        if let uid { deviceUIDs.insert(uid) }
+    }
+    func allows(_ uid: String) -> Bool { !deviceUIDs.contains(uid) }
+}
+
 /// Persisted device identity never relies on an AudioDeviceID surviving restart.
 struct AudioDuckingRecoveryRecord: Codable, Equatable {
     static let currentVersion = 1

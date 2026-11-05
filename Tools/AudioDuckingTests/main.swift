@@ -973,3 +973,79 @@ pausedStopRuntime.volumeChanged(token: pausedStopToken, now: 4.1)
 check(pausedStopRuntime.status == .idle && pausedStopOutput.devices[1]!.values == [0.6],
       "Stop before the buffered acknowledgement still restores the original volume")
 print("AudioDucking Stop before buffered notification checks passed")
+
+// Invalidation while the write intent is on disk must win final admission.
+let admissionDirectory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("voiceink-admission-\(UUID().uuidString)")
+defer { try? FileManager.default.removeItem(at: admissionDirectory) }
+let admissionJournal = try AudioDuckingRecoveryJournal(directory: admissionDirectory)
+let admissionOutput = makeOutput([0.6])
+admissionOutput.requiresWriteNotification = true
+let admissionLatch = AudioDuckingEventLatch()
+var intentWasDurable = false
+let admissionRuntime = AudioDuckingRuntime(output: admissionOutput, journal: admissionJournal,
+    normalWriteAllowed: { admissionLatch.permits($0) }, writeAdmission: { token, operation in
+        if case .record(let stored) = try? admissionJournal.read() { intentWasDurable = stored.phase == .writeIntent }
+        _ = admissionLatch.invalidate()
+        return admissionLatch.performWrite(ifCurrent: token, operation)
+    })
+let admissionToken = admissionRuntime.begin(sessionID: UUID(), desired: runtimeConfig)!
+check(admissionLatch.admit(admissionToken, observedEpoch: admissionLatch.currentEpoch()), "admission test installs lease")
+admissionRuntime.activate(token: admissionToken, now: 0)
+check(intentWasDurable && admissionOutput.writes.isEmpty, "event after durable intent prevents the not-yet-issued setter")
+check(!admissionRuntime.hasPendingWrite && !admissionRuntime.isQuarantined, "refused final admission is not an attempted setter")
+
+// Events serialize with the synchronous setter, not its later hardware effect.
+let orderedLatch = AudioDuckingEventLatch()
+var orderedLease = AudioDuckingLease()
+let orderedToken = orderedLease.begin(UUID())
+check(orderedLatch.admit(orderedToken, observedEpoch: orderedLatch.currentEpoch()), "ordered setter admits token")
+let eventEntered = DispatchSemaphore(value: 0)
+let eventFinished = DispatchSemaphore(value: 0)
+var orderedCalls = 0
+_ = orderedLatch.performWrite(ifCurrent: orderedToken) {
+    DispatchQueue.global().async {
+        eventEntered.signal()
+        _ = orderedLatch.invalidate()
+        eventFinished.signal()
+    }
+    check(eventEntered.wait(timeout: .now() + 2) == .success, "concurrent invalidation reaches gate")
+    check(eventFinished.wait(timeout: .now()) == .timedOut, "event cannot pass final admission during setter")
+    orderedCalls += 1
+    return .attempted(true)
+}
+check(eventFinished.wait(timeout: .now() + 2) == .success, "event completes after synchronous setter")
+_ = orderedLatch.performWrite(ifCurrent: orderedToken) { orderedCalls += 1; return .attempted(true) }
+check(orderedCalls == 1 && !orderedLatch.permits(orderedToken), "invalidated token cannot issue another setter")
+
+// Runtime replacement for a different device cannot forget a late-write risk.
+var liveEffects = AudioDuckingUnsettledWrites()
+check(noNotificationRuntime.quarantinedDeviceUID == "one", "timed-out runtime retains the original UID")
+liveEffects.retain(noNotificationRuntime.quarantinedDeviceUID)
+let replacementRuntime = AudioDuckingRuntime(output: makeOutput([0.8]))
+check(liveEffects.allows("two") && !liveEffects.allows("one"), "unsettled output blocks only its own UID after handoff")
+noNotification.deliverPendingWrite()
+check(!liveEffects.allows("one"), "late effect/readback cannot implicitly release process quarantine")
+check(replacementRuntime.status == .idle, "replacement runtime does not erase the separate registry")
+print("Final setter admission and retained live-effect quarantine checks passed")
+
+// Named recovery uses the same final admission, after persisting its intent.
+let gatedRecoveryJournal = try AudioDuckingRecoveryJournal(directory: admissionDirectory.appendingPathComponent("recovery"))
+try gatedRecoveryJournal.write(recoveryRecord)
+let gatedRecoveryOutput = makeOutput([0.12])
+let gatedRecovery = AudioDuckingRecoveryCoordinator(journal: gatedRecoveryJournal, output: gatedRecoveryOutput, resolve: { _ in 1 })
+gatedRecovery.prepare(continuousOwnership: true)
+let recoveryGate = AudioDuckingEventLatch()
+var recoveryGateLease = AudioDuckingLease()
+let recoveryGateToken = recoveryGateLease.begin(UUID())
+check(recoveryGate.admit(recoveryGateToken, observedEpoch: recoveryGate.currentEpoch()), "recovery gate admits token")
+gatedRecovery.issue(now: 0, writeAdmission: { operation in
+    _ = recoveryGate.invalidate()
+    return recoveryGate.performWrite(ifCurrent: recoveryGateToken, operation)
+})
+check(gatedRecoveryOutput.writes.isEmpty && gatedRecovery.unsettledDeviceUID == nil,
+      "recovery event after intent denies setter without inventing a pending effect")
+check(coordinator.unsettledDeviceUID == "one", "invalidated recovery retains unsettled UID after late notification")
+coordinator.prepare(continuousOwnership: true)
+coordinator.issue(now: 50)
+check(recoveryOutput.writes.count == pendingRecoveryWrites, "unsettled named recovery cannot be reissued by prepare")
+print("Named recovery final admission and no-reissue checks passed")

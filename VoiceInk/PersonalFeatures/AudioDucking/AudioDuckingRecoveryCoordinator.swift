@@ -13,6 +13,7 @@ final class AudioDuckingRecoveryCoordinator {
     private let output: AudioDuckingOutput
     private let resolve: (String) -> UInt32?
     private(set) var state: State = .idle
+    private(set) var unsettledDeviceUID: String?
 
     init(journal: AudioDuckingRecoveryJournal, output: AudioDuckingOutput, resolve: @escaping (String) -> UInt32?) {
         self.journal = journal
@@ -22,6 +23,7 @@ final class AudioDuckingRecoveryCoordinator {
 
     /// Inventory is read-only with respect to audio hardware.
     func prepare(continuousOwnership: Bool = false, now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        guard unsettledDeviceUID == nil else { state = .incomplete; return }
         do {
             switch try journal.read() {
             case .absent: state = .idle
@@ -48,7 +50,8 @@ final class AudioDuckingRecoveryCoordinator {
         } catch { state = .incomplete }
     }
 
-    func issue(now: TimeInterval, allowed: () -> Bool = { true }) {
+    func issue(now: TimeInterval, allowed: () -> Bool = { true },
+               writeAdmission: (() -> AudioDuckingWriteResult) -> AudioDuckingWriteResult = { $0() }) {
         guard case .needsListener(let plan) = state, now.isFinite,
               plan.snapshot.elements.count == 1,
               let current = output.readNamed(deviceID: plan.snapshot.deviceID),
@@ -60,13 +63,19 @@ final class AudioDuckingRecoveryCoordinator {
                 state = .incomplete
                 return
             }
-            switch output.writeOwnedDevice(deviceID: current.deviceID, element: current.elements[0],
-                                          value: plan.record.baseline[0], expected: current) {
+            switch writeAdmission({
+                output.writeOwnedDevice(deviceID: current.deviceID, element: current.elements[0],
+                                        value: plan.record.baseline[0], expected: current)
+            }) {
             case .notAttempted:
                 try journal.write(plan.record)
                 state = .incomplete
-            case .attempted(false): state = .incomplete
-            case .attempted(true): state = .waiting(plan, deadline: now + 2)
+            case .attempted(false):
+                unsettledDeviceUID = plan.record.deviceUID
+                state = .incomplete
+            case .attempted(true):
+                unsettledDeviceUID = plan.record.deviceUID
+                state = .waiting(plan, deadline: now + 2)
             }
         } catch { state = .incomplete }
     }
@@ -84,6 +93,7 @@ final class AudioDuckingRecoveryCoordinator {
         do {
             try journal.write(plan.record.replacing(phase: .restored, confirmed: current.values))
             try journal.clear()
+            unsettledDeviceUID = nil
             state = .idle
         } catch { state = .incomplete }
     }

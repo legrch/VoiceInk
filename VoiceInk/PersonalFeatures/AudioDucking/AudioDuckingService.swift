@@ -20,6 +20,15 @@ final class AudioDuckingService {
     private var deferredRetainedLevel: (AudioDuckingLease.Token, Double)?
     private var recoveryBlocked = false
     private var recoveryContinuityLost = false
+    private var unsettledWrites = AudioDuckingUnsettledWrites()
+
+    // Queue-confined, retained even when another output receives a fresh runtime.
+    private func retainUnsettledWrites() {
+        unsettledWrites.retain(runtime.quarantinedDeviceUID)
+        if let recovery, case .incomplete = recovery.state {
+            unsettledWrites.retain(recovery.unsettledDeviceUID)
+        }
+    }
     private let recoveryLatch = AudioDuckingEventLatch()
     private var recoveryToken: AudioDuckingLease.Token?
     private var recoveryTimer: DispatchSourceTimer?
@@ -56,7 +65,8 @@ final class AudioDuckingService {
             let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             journal = try AudioDuckingRecoveryJournal(directory: base.appendingPathComponent("com.prakashjoshipax.VoiceInk/PersonalAudioDucking", isDirectory: true))
         } catch { recoveryBlocked = true }
-        runtime = AudioDuckingRuntime(output: output, journal: journal, normalWriteAllowed: { eventLatch.permits($0) })
+        runtime = AudioDuckingRuntime(output: output, journal: journal, normalWriteAllowed: { eventLatch.permits($0) },
+            writeAdmission: { token, operation in eventLatch.performWrite(ifCurrent: token, operation) })
         if let journal {
             recovery = AudioDuckingRecoveryCoordinator(journal: journal, output: output, resolve: { output.device(forUID: $0) })
         }
@@ -85,7 +95,16 @@ final class AudioDuckingService {
     }
 
     var hasOwnershipCycle: Bool { queue.sync { runtime.hasOwnershipCycle || recoveryBlocked } }
-    var isQuarantined: Bool { queue.sync { runtime.isQuarantined || recoveryBlocked } }
+    private var selectedOutputUnsettled: Bool {
+        guard let identity = AudioDuckingCoreAudio().currentOutputIdentity() else { return false }
+        return !unsettledWrites.allows(identity.uid)
+    }
+    var isQuarantined: Bool {
+        queue.sync {
+            retainUnsettledWrites()
+            return runtime.isQuarantined || recoveryBlocked || selectedOutputUnsettled
+        }
+    }
     var currentOutputIdentity: (uid: String, name: String)? { queue.sync { AudioDuckingCoreAudio().currentOutputIdentity() } }
 
     var currentVolumeReading: (percent: Double, muted: Bool?, restorePercent: Double)? {
@@ -100,10 +119,11 @@ final class AudioDuckingService {
 
     var canAcknowledgeRecovery: Bool {
         queue.sync {
+            retainUnsettledWrites()
             guard recoveryToken == nil, !runtime.hasPendingWrite,
                   runtime.status != .active, runtime.status != .restoring,
                   let journal, let snapshot = AudioDuckingCoreAudio().readDefault(), snapshot.muted != nil else { return false }
-            return (try? journal.pendingRecovery(for: snapshot.uid)) != nil
+            return unsettledWrites.allows(snapshot.uid) && (try? journal.pendingRecovery(for: snapshot.uid)) != nil
         }
     }
 
@@ -111,11 +131,13 @@ final class AudioDuckingService {
     /// It never writes volume, restores baseline or confirms a previous setter.
     func acknowledgeRecovery(reason: AudioDuckingRecoveryJournal.AcknowledgmentReason = .userSetVolume) -> Bool {
         queue.sync {
+            retainUnsettledWrites()
             guard recoveryToken == nil, !runtime.hasPendingWrite,
                   runtime.status != .active, runtime.status != .restoring, let journal else { return false }
             let epoch = latch.currentEpoch()
             let output = AudioDuckingCoreAudio()
-            guard let snapshot = output.readDefault(), snapshot.muted != nil else { return false }
+            guard let snapshot = output.readDefault(), snapshot.muted != nil,
+                  unsettledWrites.allows(snapshot.uid) else { return false }
             do {
                 var accepted = false
                 for _ in 0..<64 {
@@ -139,7 +161,8 @@ final class AudioDuckingService {
                 removeDeviceListeners()
                 let eventLatch = latch
                 runtime = AudioDuckingRuntime(output: output, journal: journal,
-                    normalWriteAllowed: { eventLatch.permits($0) })
+                    normalWriteAllowed: { eventLatch.permits($0) },
+            writeAdmission: { token, operation in eventLatch.performWrite(ifCurrent: token, operation) })
                 recoveryBlocked = false
                 recoveryContinuityLost = false
                 lastReportedStatus = nil
@@ -165,6 +188,11 @@ final class AudioDuckingService {
     /// Snapshot is taken synchronously at recording begin, before the 220 ms trigger.
     func begin(sessionID: UUID, desired: AudioDuckingConfiguration) -> AudioDuckingLease.Token? {
         queue.sync {
+            retainUnsettledWrites()
+            if let output = AudioDuckingCoreAudio().currentOutputIdentity(), !unsettledWrites.allows(output.uid) {
+                publishStatus(.incomplete)
+                return nil
+            }
             guard !recoveryBlocked else { publishStatus(.incomplete); return nil }
             if !runtime.hasOwnershipCycle {
                 guard let journal else { recoveryBlocked = true; publishStatus(.incomplete); return nil }
@@ -329,7 +357,8 @@ final class AudioDuckingService {
     }
 
     private func publishStatus(_ status: AudioDuckingRuntime.Status) {
-        let quarantined = runtime.isQuarantined || recoveryBlocked
+        retainUnsettledWrites()
+        let quarantined = runtime.isQuarantined || recoveryBlocked || selectedOutputUnsettled
         guard lastReportedStatus != status || lastReportedQuarantine != quarantined || lastReportedAdjustmentID != runtime.manualAdjustment?.id else { return }
         lastReportedAdjustmentID = runtime.manualAdjustment?.id
         lastReportedStatus = status
@@ -579,6 +608,7 @@ final class AudioDuckingService {
     /// Preserve another output's evidence without quarantining the selected
     /// output. Its own UID remains blocked, including while it is connected.
     private func holdOtherOutputRecoveryIfPossible() -> Bool {
+        retainUnsettledWrites()
         guard recoveryToken == nil, !runtime.hasPendingWrite,
               runtime.status != .active, runtime.status != .restoring,
               let journal, case .record(let record) = try? journal.read(),
@@ -591,7 +621,8 @@ final class AudioDuckingService {
             removeDeviceListeners()
             let eventLatch = latch
             runtime = AudioDuckingRuntime(output: AudioDuckingCoreAudio(), journal: journal,
-                normalWriteAllowed: { eventLatch.permits($0) })
+                normalWriteAllowed: { eventLatch.permits($0) },
+            writeAdmission: { token, operation in eventLatch.performWrite(ifCurrent: token, operation) })
             recoveryBlocked = false
             recoveryContinuityLost = false
             return true
@@ -638,7 +669,9 @@ final class AudioDuckingService {
                 return
             }
             recoveryToken = token
-            recovery.issue(now: ProcessInfo.processInfo.systemUptime, allowed: { self.recoveryLatch.permits(token) })
+            recovery.issue(now: ProcessInfo.processInfo.systemUptime,
+                allowed: { self.recoveryLatch.permits(token) },
+                writeAdmission: { self.recoveryLatch.performWrite(ifCurrent: token, $0) })
             handleRecoveryState()
             if case .waiting = recovery.state {
                 let source = DispatchSource.makeTimerSource(queue: queue)

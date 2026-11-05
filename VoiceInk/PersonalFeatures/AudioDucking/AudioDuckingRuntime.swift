@@ -79,6 +79,9 @@ final class AudioDuckingRuntime {
     private let output: AudioDuckingOutput
     private let journal: AudioDuckingRecoveryJournal?
     private let normalWriteAllowed: (AudioDuckingLease.Token) -> Bool
+    private let writeAdmission: (AudioDuckingLease.Token, () -> AudioDuckingWriteResult) -> AudioDuckingWriteResult
+    private var cycleDeviceUID: String?
+    var quarantinedDeviceUID: String? { unresolvedWrite ? cycleDeviceUID : nil }
     private(set) var lease = AudioDuckingLease()
     private(set) var status: Status = .idle
     private(set) var failureReason = "none"
@@ -127,10 +130,15 @@ final class AudioDuckingRuntime {
         } ?? false)
     }
 
-    init(output: AudioDuckingOutput, journal: AudioDuckingRecoveryJournal? = nil, normalWriteAllowed: @escaping (AudioDuckingLease.Token) -> Bool = { _ in true }) {
+    init(output: AudioDuckingOutput, journal: AudioDuckingRecoveryJournal? = nil,
+         normalWriteAllowed: @escaping (AudioDuckingLease.Token) -> Bool = { _ in true },
+         writeAdmission: ((AudioDuckingLease.Token, () -> AudioDuckingWriteResult) -> AudioDuckingWriteResult)? = nil) {
         self.output = output
         self.journal = journal
         self.normalWriteAllowed = normalWriteAllowed
+        self.writeAdmission = writeAdmission ?? { token, operation in
+            normalWriteAllowed(token) ? operation() : .notAttempted
+        }
     }
 
     private func persist(_ phase: AudioDuckingRecoveryRecord.Phase, snapshot: AudioDuckingOutputSnapshot,
@@ -173,6 +181,7 @@ final class AudioDuckingRuntime {
             effective.retainedPercent = desired.retainedPercent(for: snapshot.uid)
             effectiveConfiguration = effective
             beginSnapshot = snapshot
+            cycleDeviceUID = snapshot.uid
         }
         status = .active
         return token
@@ -291,7 +300,9 @@ final class AudioDuckingRuntime {
                     return
                 }
                 pendingWrite = PendingWrite(token: token, index: index, before: observed, target: target, deadline: now + 2)
-                switch output.writeDefault(deviceID: initial.deviceID, element: initial.elements[index], value: target, expected: observed) {
+                switch writeAdmission(token, {
+                    output.writeDefault(deviceID: initial.deviceID, element: initial.elements[index], value: target, expected: observed)
+                }) {
                 case .notAttempted:
                     pendingWrite = nil
                     failureReason = "preflight_changed"
@@ -308,7 +319,9 @@ final class AudioDuckingRuntime {
                 }
                 return
             }
-            let result = output.writeDefault(deviceID: initial.deviceID, element: initial.elements[index], value: target, expected: observed)
+            let result = writeAdmission(token) {
+                output.writeDefault(deviceID: initial.deviceID, element: initial.elements[index], value: target, expected: observed)
+            }
             let success: Bool
             switch result {
             case .notAttempted:

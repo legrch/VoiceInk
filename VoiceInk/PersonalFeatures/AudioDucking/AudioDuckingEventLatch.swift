@@ -18,6 +18,17 @@ final class AudioDuckingEventLatch {
         return try operation()
     }
 
+    /// The final admission and the synchronous HAL call share the event lock.
+    /// Journal I/O happens before admission. CoreAudio listeners use our explicit
+    /// dispatch queue (never NULL); these non-I/O-context notifications are async.
+    /// A hardware effect after the setter returns still requires confirmation.
+    func performWrite(ifCurrent expected: AudioDuckingLease.Token,
+                      _ operation: () -> AudioDuckingWriteResult) -> AudioDuckingWriteResult {
+        lock.lock(); defer { lock.unlock() }
+        guard token == expected, admittedEpoch == epoch else { return .notAttempted }
+        return operation()
+    }
+
     func currentEpoch() -> UInt64 {
         lock.lock(); defer { lock.unlock() }
         return epoch

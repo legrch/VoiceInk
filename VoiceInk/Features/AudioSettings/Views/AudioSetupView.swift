@@ -49,7 +49,9 @@ struct AudioSetupView: View {
             Section {
                 Toggle("Lower Audio While Recording", isOn: duckingEnabled)
                 if mediaController.duckingQuarantined || mediaController.canAcknowledgeDuckingRecovery {
-                    Text("Check system volume, then switch this off and on to reset.")
+                    Text(mediaController.canAcknowledgeDuckingRecovery
+                        ? "Check system volume, then switch this off and on to reset."
+                        : "An audio change is unresolved. Quit VoiceInk, check system volume, then reopen it.")
                         .foregroundStyle(.secondary)
                         .help("Reset archives recovery evidence without changing volume. It does not cancel a previously pending system change.")
                 }
