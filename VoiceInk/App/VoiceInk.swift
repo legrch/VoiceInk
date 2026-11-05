@@ -381,6 +381,10 @@ struct VoiceInkApp: App {
         .commands {
             CommandGroup(replacing: .newItem) {}
 
+            CommandGroup(replacing: .appInfo) {
+                Button("About VoiceInk Plus", action: PlusAboutPanel.show)
+            }
+
             CommandGroup(after: .appInfo) {
                 CheckForUpdatesView(updaterViewModel: updaterViewModel)
             }

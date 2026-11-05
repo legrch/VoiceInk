@@ -22,7 +22,6 @@ struct CheckForUpdatesView: View {
     @ObservedObject var updaterViewModel: UpdaterViewModel
 
     var body: some View {
-        Button("Updates Managed Manually", action: updaterViewModel.checkForUpdates)
-            .disabled(true)
+        Link("Latest Plus Release…", destination: PlusReleaseMetadata.latestReleaseURL)
     }
 }

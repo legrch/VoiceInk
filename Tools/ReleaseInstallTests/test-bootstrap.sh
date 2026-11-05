@@ -2,10 +2,13 @@
 # Exercise bootstrap parsing, verified handoff and cleanup without installation.
 set -euo pipefail
 root=$(cd "$(dirname "$0")/../.." && pwd)
-bootstrap="$root/scripts/install-release.sh"
+bootstrap=${VOICEINK_BOOTSTRAP_TEST_SCRIPT:-"$root/scripts/install-release.sh"}
 payload="$root/scripts/install.sh"
 fixture=$(mktemp -d /private/tmp/voiceink-bootstrap-tests.XXXXXXXX)
 trap 'rm -rf "$fixture"' EXIT
+# Historical exact-version installs retain the immutable legacy payload.
+export BOOTSTRAP_LEGACY_PAYLOAD="$fixture/legacy-install.sh"
+git -C "$root" show 7852619a59ba84f34e386019c55eaf8fa1ba5eeb:scripts/install.sh > "$BOOTSTRAP_LEGACY_PAYLOAD"
 cat > "$fixture/runner.sh" <<'RUNNER'
 #!/bin/bash
 source "$1"
@@ -16,6 +19,7 @@ shift 4
 mktemp() { command mktemp "$@" | tee "$result/work"; }
 curl() {
     printf '%s\n' "$@" > "$result/download"
+    download_args="$*"
     output=''
     while [[ $# -gt 0 ]]; do
         if [[ "$1" == -o ]]; then output=$2; shift 2; else shift; fi
@@ -24,7 +28,10 @@ curl() {
     case "$mode" in
         download-failure) return 22 ;;
         corrupt) printf 'not the verified installer' > "$output" ;;
-        *) cp "$payload" "$output" ;;
+        *)
+            if [[ "$download_args" == *7852619a59ba84f34e386019c55eaf8fa1ba5eeb* ]]; then
+                cp "$BOOTSTRAP_LEGACY_PAYLOAD" "$output"
+            else cp "$payload" "$output"; fi ;;
     esac
 }
 bash() {
