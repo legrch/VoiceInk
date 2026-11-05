@@ -20,7 +20,7 @@ Keep the full upstream version and our release revision separate. Do not reserve
 | 2.26 | 1 | VoiceInk Plus 2.26 · r1 | `plus-v2.26-r1` | 1004 |
 
 - Preserve the upstream version exactly as provenance, including any patch component. Increment `rN` for each published Plus release on that base; start at `r1` when the upstream version changes.
-- Use an independent, strictly increasing numeric `CFBundleVersion`. Choose its initial value above the installed and published builds; 1001 is an example, not an allocated build. Never reset this counter on a new upstream base or derive update order from `rN` alone.
+- Use an independent, strictly increasing numeric `CFBundleVersion`. Choose its initial value above the installed and published builds. The first Plus release allocates build 1001; choose a higher build for every later published release. Never reset this counter on a new upstream base or derive update order from `rN` alone.
 - Tags are human-readable Git identifiers, not strict SemVer or an updater comparison algorithm. SemVer `+metadata` does not determine precedence. A future own updater must use a qualified numeric build ordering.
 - Keep repository `legrch/VoiceInk`, bundle identifier, signing identity and `/Applications/VoiceInk.app`. Label Plus as an independent fork, separate from upstream's Pro product.
 

@@ -1795,3 +1795,207 @@ let retainedInvalidEvidence = try Data(contentsOf: failedMuteDirectory.appending
 check(retainedInvalidEvidence == invalidEvidence, "failed mute persistence preserves unresolved durable evidence")
 try FileManager.default.removeItem(at: failedMuteDirectory)
 print("Durable mute-only journal, restart and persistence-failure checks passed")
+
+// Reserve the latest recording across a real changed mute bit, rather than
+// merely pausing an unchanged latch. Muted inherited activation still owes
+// restoration; mute hardware is never written by this runtime.
+for baseline: [Float] in [[0.6], [0.6, 0.3]] {
+    for muted in [false, true] {
+        for stopBeforeAdmission in [false, true] {
+            for replace in [false, true] {
+                let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("voiceink-real-mute-handoff-\(UUID().uuidString)")
+                let journal = try AudioDuckingRecoveryJournal(directory: directory)
+                let output = makeOutput(baseline); output.requiresWriteNotification = true; output.deferWrites = true
+                let latch = AudioDuckingEventLatch()
+                let runtime = AudioDuckingRuntime(output: output, journal: journal, normalWriteAllowed: { latch.permits($0) })
+                var cfg = runtimeConfig; cfg.restoreDelaySeconds = 1
+                let a = runtime.begin(sessionID: UUID(), desired: cfg)!
+                check(latch.admit(a, observedEpoch: latch.currentEpoch()), "real mute handoff admitted")
+                runtime.activate(token: a, now: 0)
+                var clock = 0.0
+                driveAsyncTransition(runtime, output, token: a, untilIdle: false, clock: &clock)
+                func setMute(_ value: Bool) {
+                    let old = output.devices[1]!
+                    output.devices[1] = AudioDuckingOutputSnapshot(deviceID: old.deviceID, uid: old.uid,
+                        elements: old.elements, values: old.values, muted: value, control: old.control,
+                        stereoChannels: old.stereoChannels, balance: old.balance, channelLayout: old.channelLayout)
+                }
+                if !muted {
+                    let epoch = latch.pause(ifCurrent: a)!
+                    setMute(true)
+                    check(runtime.observeMuteChange(token: a) && latch.resume(a, after: epoch), "prepare actual unmute transition")
+                }
+                let epoch = latch.pause(ifCurrent: a)!
+                setMute(muted)
+                let writes = output.writes.count
+                let b = runtime.begin(sessionID: UUID(), desired: cfg, deferUntilAdmitted: true)
+                check(b != nil, "changed mute metadata cannot discard a pure replacement reservation")
+                let originalB = b!
+                var latest = originalB
+                if replace { latest = runtime.begin(sessionID: UUID(), desired: cfg, deferUntilAdmitted: true)! }
+                runtime.updateRetainedPercent(55, token: latest, now: clock + 0.01)
+                runtime.activate(token: latest, now: clock + 0.22)
+                runtime.end(token: a, now: clock + 0.03) // Old buffered Stop must not own B.
+                if replace { runtime.end(token: originalB, now: clock + 0.04) }
+                if stopBeforeAdmission {
+                    runtime.end(token: latest, now: clock + 0.05)
+                    runtime.end(token: latest, now: clock + 0.5)
+                }
+                check(runtime.completeDeferredBegin(now: clock + 0.25, admit: { _, _, _ in check(false, "paused handoff must not reach admission"); return false }) == nil,
+                      "changed-mute request stays fenced before reconciliation")
+                runtime.tick(token: a, now: clock + 0.26)
+                check(output.writes.count == writes && runtime.lease.token == a && runtime.lease.baseline == baseline,
+                      "reservation preserves old owner and issues no setter")
+                check(runtime.observeMuteChange(token: a), "real mute metadata is reconciled with a queued recording")
+                guard case .record(let observed) = try journal.read() else { check(false, "real mute metadata stays durable"); exit(1) }
+                check(observed.muted == muted && observed.baseline == baseline, "reconciliation retains original durable volume")
+                check(latch.resume(a, after: epoch), "only reconciled mute epoch resumes")
+                check(runtime.completeDeferredBegin(now: clock + 0.3, admit: { old, new, _ in latch.handoff(from: old, to: new) }) == latest,
+                      "real mute pause admits only the latest recording")
+                check(runtime.lease.baseline == baseline && runtime.effectiveConfiguration?.retainedPercent == 55 && !runtime.isQuarantined,
+                      "muted and unmuted inherited activation keep the volume obligation and selected level")
+                if !stopBeforeAdmission {
+                    clock += 0.3
+                    driveAsyncTransition(runtime, output, token: latest, untilIdle: false, clock: &clock)
+                    check(AudioDuckingOutputSnapshot.levelsMatch(output.devices[1]!.values, baseline.map { $0 * 0.55 }),
+                          "replacement recording uses selected level even while the owner keeps mute enabled")
+                    runtime.end(token: latest, now: clock)
+                }
+                clock += 0.3
+                driveAsyncTransition(runtime, output, token: latest, untilIdle: true, clock: &clock)
+                check(output.devices[1]!.values == baseline && output.devices[1]!.muted == muted,
+                      "latest Stop restores the original mono/stereo volume without changing mute")
+                if case .absent = try journal.read() {} else { check(false, "completed real-mute cycle clears its own journal") }
+                try FileManager.default.removeItem(at: directory)
+            }
+        }
+    }
+}
+
+for revoke in ["pending-mute", "route", "sleep"] {
+    let output = makeOutput([0.6]); output.requiresWriteNotification = true; output.deferWrites = true
+    let latch = AudioDuckingEventLatch()
+    let runtime = AudioDuckingRuntime(output: output, normalWriteAllowed: { latch.permits($0) })
+    let a = runtime.begin(sessionID: UUID(), desired: runtimeConfig)!
+    check(latch.admit(a, observedEpoch: latch.currentEpoch()), "real-mute revocation fixture admitted")
+    runtime.activate(token: a, now: 0)
+    var clock = 0.0
+    if revoke != "pending-mute" { driveAsyncTransition(runtime, output, token: a, untilIdle: false, clock: &clock) }
+    let epoch = latch.pause(ifCurrent: a)!
+    let current = output.devices[1]!
+    output.devices[1] = AudioDuckingOutputSnapshot(deviceID: 1, uid: "one", elements: [1], values: current.values, muted: true)
+    let b = runtime.begin(sessionID: UUID(), desired: runtimeConfig, deferUntilAdmitted: true)!
+    let writes = output.writes.count
+    if revoke == "pending-mute" {
+        check(!runtime.observeMuteChange(token: a), "changed mute with an issued setter remains uncertain")
+    } else if revoke == "route" {
+        output.devices[2] = AudioDuckingOutputSnapshot(deviceID: 2, uid: "two", elements: [1], values: [0.8], muted: false)
+        output.selected = 2
+    }
+    _ = latch.invalidate(ifCurrent: a)
+    runtime.invalidate(token: a)
+    check(!latch.resume(a, after: epoch), "real revocation cannot reuse a mute resume proof")
+    check(runtime.completeDeferredBegin(now: 10, admit: { _, _, _ in true }) == nil, "revocation retires reserved recording")
+    runtime.activate(token: b, now: 10); runtime.end(token: b, now: 11); runtime.tick(token: b, now: 20)
+    check(output.writes.count == writes && runtime.deferredBeginToken == nil, "uncertainty and lifecycle events never resume reserved setters")
+    if revoke == "pending-mute" { check(runtime.isQuarantined, "pending mute uncertainty retains quarantine") }
+}
+let freshMutedOutput = makeOutput([0.6])
+freshMutedOutput.devices[1] = AudioDuckingOutputSnapshot(deviceID: 1, uid: "one", elements: [1], values: [0.6], muted: true)
+let freshMutedRuntime = AudioDuckingRuntime(output: freshMutedOutput)
+let freshMutedToken = freshMutedRuntime.begin(sessionID: UUID(), desired: runtimeConfig)!
+freshMutedRuntime.activate(token: freshMutedToken, now: 0)
+check(freshMutedOutput.writes.isEmpty && freshMutedRuntime.status == .unavailable && freshMutedRuntime.lease.baseline == nil,
+      "fresh muted output still suppresses ducking without taking restoration ownership")
+print("Real mute/unmute replacement, inherited muted activation and revocation matrix passed")
+
+// Exact inherited-muted activation scenario: A's Stop has already started its
+// grace interval, so B must replace that deadline and retain the same baseline.
+for baseline: [Float] in [[0.6], [0.6, 0.3]] {
+    let output = makeOutput(baseline); output.requiresWriteNotification = true; output.deferWrites = true
+    let latch = AudioDuckingEventLatch()
+    let runtime = AudioDuckingRuntime(output: output, normalWriteAllowed: { latch.permits($0) })
+    var cfg = runtimeConfig; cfg.restoreDelaySeconds = 1
+    let a = runtime.begin(sessionID: UUID(), desired: cfg)!
+    check(latch.admit(a, observedEpoch: latch.currentEpoch()), "inherited muted deadline fixture admitted")
+    runtime.activate(token: a, now: 0)
+    var clock = 0.0
+    driveAsyncTransition(runtime, output, token: a, untilIdle: false, clock: &clock)
+    let current = output.devices[1]!
+    let epoch = latch.pause(ifCurrent: a)!
+    output.devices[1] = AudioDuckingOutputSnapshot(deviceID: 1, uid: "one", elements: current.elements, values: current.values, muted: true)
+    check(runtime.observeMuteChange(token: a) && latch.resume(a, after: epoch), "inherited fixture reconciles true mute")
+    runtime.end(token: a, now: clock + 0.1)
+    let b = runtime.begin(sessionID: UUID(), desired: cfg, deferUntilAdmitted: true)!
+    runtime.activate(token: b, now: clock + 0.22)
+    check(runtime.completeDeferredBegin(now: clock + 0.3, admit: { old, new, _ in latch.handoff(from: old, to: new) }) == b,
+          "muted B inherits A during the restore grace interval")
+    check(runtime.lease.baseline == baseline && runtime.lease.restoreDeadline == nil && !runtime.isQuarantined,
+          "muted activation keeps baseline while superseding A's old restore deadline")
+    clock += 0.3
+    driveAsyncTransition(runtime, output, token: b, untilIdle: false, clock: &clock)
+    runtime.end(token: b, now: clock)
+    driveAsyncTransition(runtime, output, token: b, untilIdle: true, clock: &clock)
+    check(output.devices[1]!.values == baseline && output.devices[1]!.muted == true,
+          "B Stop discharges inherited mono/stereo restoration without unmuting")
+}
+print("Already-ended muted cycle replacement checks passed")
+
+// Failed successor reservation cannot leave A's delayed restore independently
+// running during B. No unreadable or unknown mute state proves safe ownership.
+for failure in ["read-unavailable", "mute-unknown", "controls-changed", "pending-read-unavailable"] {
+    for baseline: [Float] in [[0.6], [0.6, 0.3]] {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("voiceink-rejected-handoff-\(UUID().uuidString)")
+        let journal = try AudioDuckingRecoveryJournal(directory: directory)
+        let output = makeOutput(baseline); output.requiresWriteNotification = true; output.deferWrites = true
+        let latch = AudioDuckingEventLatch()
+        let runtime = AudioDuckingRuntime(output: output, journal: journal, normalWriteAllowed: { latch.permits($0) })
+        let a = runtime.begin(sessionID: UUID(), desired: runtimeConfig)!
+        check(latch.admit(a, observedEpoch: latch.currentEpoch()), "rejected successor fixture admitted")
+        runtime.activate(token: a, now: 0)
+        var clock = 0.0
+        if failure != "pending-read-unavailable" { driveAsyncTransition(runtime, output, token: a, untilIdle: false, clock: &clock) }
+        runtime.end(token: a, now: clock + 0.1)
+        let writes = output.writes.count
+        guard case .record(let before) = try journal.read() else { check(false, "rejected fixture retains durable ownership"); exit(1) }
+        if failure == "mute-unknown" {
+            let current = output.devices[1]!
+            output.devices[1] = AudioDuckingOutputSnapshot(deviceID: 1, uid: "one", elements: current.elements, values: current.values, muted: nil)
+        } else if failure == "controls-changed" {
+            output.devices[2] = AudioDuckingOutputSnapshot(deviceID: 2, uid: "two", elements: [1], values: [0.8], muted: false)
+            output.selected = 2
+        } else { output.hideDefault = true }
+        check(runtime.begin(sessionID: UUID(), desired: runtimeConfig, deferUntilAdmitted: true) == nil,
+              "unsafe successor snapshot is rejected")
+        _ = latch.invalidate(ifCurrent: a); latch.clear(a) // Service retires its listener/timer lease too.
+        output.hideDefault = false
+        runtime.tick(token: a, now: 10)
+        runtime.volumeChanged(token: a, now: 11)
+        runtime.end(token: a, now: 12)
+        check(output.writes.count == writes && !latch.permits(a) && runtime.lease.token != a && runtime.deferredBeginToken == nil,
+              "rejected successor cannot leave an independently running predecessor restoration")
+        guard case .record(let after) = try journal.read() else { check(false, "rejected successor retains recovery evidence"); exit(1) }
+        check(after == before, "rejected successor does not erase or rewrite durable ownership evidence")
+        if failure == "pending-read-unavailable" { check(runtime.isQuarantined, "unconfirmed rejected setter keeps quarantine") }
+        try FileManager.default.removeItem(at: directory)
+    }
+}
+for baseline: [Float] in [[0.6], [0.6, 0.3]] {
+    let output = makeOutput(baseline)
+    let current = output.devices[1]!
+    output.devices[1] = AudioDuckingOutputSnapshot(deviceID: 1, uid: "one", elements: current.elements, values: current.values, muted: nil)
+    output.requiresWriteNotification = true; output.deferWrites = true
+    let runtime = AudioDuckingRuntime(output: output)
+    let a = runtime.begin(sessionID: UUID(), desired: runtimeConfig)!
+    runtime.activate(token: a, now: 0)
+    var clock = 0.0
+    driveAsyncTransition(runtime, output, token: a, untilIdle: false, clock: &clock)
+    runtime.end(token: a, now: clock + 0.1)
+    let writes = output.writes.count
+    check(runtime.begin(sessionID: UUID(), desired: runtimeConfig, deferUntilAdmitted: true) == nil,
+          "stable unknown mute is not promoted into a new recording's admitted ownership")
+    runtime.tick(token: a, now: 10)
+    check(output.writes.count == writes && runtime.lease.token != a,
+          "matching nil mute rejection retires the predecessor instead of restoring during B")
+}
+print("Unavailable, unknown-mute and changed-control successor rejection checks passed")

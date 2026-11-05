@@ -226,6 +226,10 @@ final class AudioDuckingService {
                 guard let current = runtime.lease.token,
                       latch.permits(current) || latch.isMutePaused(current) else { return nil }
                 guard let token = runtime.begin(sessionID: sessionID, desired: desired, deferUntilAdmitted: true) else {
+                    timer?.cancel()
+                    timer = nil
+                    _ = latch.invalidate(ifCurrent: current)
+                    latch.clear(current)
                     publishStatus(runtime.status)
                     return nil
                 }

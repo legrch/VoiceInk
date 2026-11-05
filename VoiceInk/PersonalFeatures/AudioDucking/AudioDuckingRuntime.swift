@@ -191,9 +191,18 @@ final class AudioDuckingRuntime {
         if deferUntilAdmitted || needsRecordingHandoff {
             // Keep the issued setter's token, listener and deadline alive. The
             // newest recording waits for its confirmation, never for the fade.
-            guard desired.isValid, let previous = lease.token, lease.baseline != nil,
-                  let initial = beginSnapshot, let current = output.readDefault(),
-                  !current.requiresInvalidation(comparedWith: initial) else { return nil }
+            guard let previous = lease.token else { return nil }
+            guard desired.isValid, lease.baseline != nil, let initial = beginSnapshot,
+                  let current = output.readDefault(), current.hasSameControls(as: initial), current.muted != nil else {
+                // A rejected successor must not leave the predecessor's normal
+                // restoration running during the new recording. Preserve any
+                // unresolved durable evidence while retiring its future writes.
+                failureReason = "handoff_snapshot_unavailable"
+                relinquish(token: previous, incomplete: true)
+                return nil
+            }
+            // Reservation is pure intent. A mute observation may still be
+            // queued; actual handoff keeps the full metadata and epoch checks.
             let next = AudioDuckingLease.Token(sessionID: sessionID,
                 generation: previous.generation &+ 1, cycleID: previous.cycleID)
             deferredBegin = DeferredBegin(token: next, desired: desired)
@@ -285,7 +294,10 @@ final class AudioDuckingRuntime {
               let config = effectiveConfiguration, config.mode == .duck,
               let initial = beginSnapshot else { return }
         guard let current = output.readDefault(), current.hasSameControls(as: initial),
-              current.muted == initial.muted, current.muted != true else {
+              current.muted == initial.muted,
+              current.muted != true || lease.baseline != nil else {
+            // A fresh muted output has nothing to duck. An inherited baseline
+            // still owes restoration, with the owner's mute state unchanged.
             let inherited = hasOwnershipCycle
             relinquish(token: token, incomplete: inherited)
             if !inherited { status = .unavailable }
