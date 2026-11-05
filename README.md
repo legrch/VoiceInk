@@ -19,13 +19,14 @@ No Xcode, Git, patches or signing certificate are needed to install a release.
 The installer downloads the pinned release, checks its SHA-256 and signing certificate, makes a backup, and installs without launching. It supports first installation and upgrades. Download it before executing:
 
 ```bash
+voiceink_installer=$(mktemp /tmp/voiceink-personal-install.XXXXXXXX)
 curl --fail --location --proto '=https' --proto-redir '=https' \
   https://github.com/legrch/VoiceInk/releases/download/personal-2.25.1/install.sh \
-  -o /tmp/voiceink-personal-install.sh
-bash /tmp/voiceink-personal-install.sh
+  -o "$voiceink_installer" &&
+bash "$voiceink_installer"
 ```
 
-If replacing an official or differently signed VoiceInk, explicitly approve the migration with `bash /tmp/voiceink-personal-install.sh --replace-existing`. macOS may ask for permissions again. Do not use sudo. An unwritable Applications directory can be avoided with `--destination "$HOME/Applications/VoiceInk.app"` after creating that directory; custom destinations keep app-only backups beside the app.
+If replacing an official or differently signed VoiceInk, explicitly approve the migration with `bash "$voiceink_installer" --replace-existing`. macOS may ask for permissions again. Do not use sudo. An unwritable Applications directory can be avoided with `--destination "$HOME/Applications/VoiceInk.app"` after creating that directory; custom destinations keep app-only backups beside the app.
 
 Default-location backups are under `~/Library/Application Support/VoiceInk-Personal-Backups/release.*`, including the previous app (when present), application support and preferences. Failed replacement attempts restore the original app or preserve the exact recovery staging path. For a manual rollback, quit VoiceInk, move the new app aside and copy the backed-up `VoiceInk.app` into Applications. Normal installation does not modify user data; retain the data backup if a later app launch migrates it.
 
