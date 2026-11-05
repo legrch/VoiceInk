@@ -1733,3 +1733,65 @@ driveAsyncTransition(capturedRuntime, capturedOutput, token: capturedB, untilIdl
 if case .absent = try capturedJournal.read() {} else { check(false, "completed inherited cycle clears its own durable record") }
 try FileManager.default.removeItem(at: capturedJournalDirectory)
 print("Normal, 100-percent and final-confirmed captured-cycle checks passed")
+
+// A mute-only observation must survive an interrupted process before any
+// subsequent volume write. Restart inventory may not discard that baseline.
+for baseline: [Float] in [[0.6], [0.6, 0.3]] {
+    let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("voiceink-mute-relaunch-\(UUID().uuidString)")
+    let journal = try AudioDuckingRecoveryJournal(directory: directory)
+    let output = makeOutput(baseline); output.requiresWriteNotification = true; output.deferWrites = true
+    let latch = AudioDuckingEventLatch()
+    let runtime = AudioDuckingRuntime(output: output, journal: journal, normalWriteAllowed: { latch.permits($0) })
+    let token = runtime.begin(sessionID: UUID(), desired: runtimeConfig)!
+    check(latch.admit(token, observedEpoch: latch.currentEpoch()), "durable mute fixture admitted")
+    runtime.activate(token: token, now: 0)
+    var clock = 0.0
+    driveAsyncTransition(runtime, output, token: token, untilIdle: false, clock: &clock)
+    let pausedEpoch = latch.pause(ifCurrent: token)!
+    runtime.updateRetainedPercent(55, token: token, now: clock, deferEffects: true)
+    let transition = runtime.lease.transition
+    let originalConfig = runtime.effectiveConfiguration
+    let current = output.devices[1]!
+    output.devices[1] = AudioDuckingOutputSnapshot(deviceID: current.deviceID, uid: current.uid,
+        elements: current.elements, values: current.values, muted: true, control: current.control,
+        stereoChannels: current.stereoChannels, balance: current.balance, channelLayout: current.channelLayout)
+    let writes = output.writes.count
+    check(runtime.observeMuteChange(token: token), "mute-only metadata durably confirmed")
+    check(output.writes.count == writes && runtime.manualAdjustment == nil && runtime.lease.baseline == baseline,
+          "durable mute observation neither writes hardware nor adopts a new baseline")
+    check(runtime.effectiveConfiguration == originalConfig && runtime.lease.transition?.end == transition?.end,
+          "durable mute metadata preserves selected configuration and sampled transition")
+    guard case .record(let stored) = try journal.read() else { check(false, "durable mute record exists"); exit(1) }
+    check(stored.phase == .confirmed && stored.muted == true && stored.baseline == baseline && stored.confirmed == current.values,
+          "journal retains original baseline and updated mute at the confirmed level")
+    let restarted = AudioDuckingRecoveryCoordinator(journal: journal, output: output, resolve: { $0 == current.uid ? 1 : nil })
+    restarted.prepare(now: 10)
+    if case .incomplete = restarted.state {} else { check(false, "restart retains ambiguous confirmed ownership without restoring") }
+    guard case .record(let afterRestart) = try journal.read() else { check(false, "restart must not erase the volume obligation"); exit(1) }
+    check(afterRestart == stored && output.writes.count == writes, "restart inventory preserves journal and performs no setters")
+    check(latch.resume(token, after: pausedEpoch), "confirmed durable mute metadata permits the original epoch to resume")
+    check(runtime.resumeRetainedPercent(token: token, now: clock + 0.1), "mute persistence retains the pending selected level")
+    check(runtime.effectiveConfiguration?.retainedPercent == 55, "mute persistence retains the exact selected percentage")
+    try FileManager.default.removeItem(at: directory)
+}
+
+let failedMuteDirectory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("voiceink-mute-journal-failure-\(UUID().uuidString)")
+let failedMuteJournal = try AudioDuckingRecoveryJournal(directory: failedMuteDirectory)
+let failedMuteOutput = makeOutput([0.6])
+let failedMuteRuntime = AudioDuckingRuntime(output: failedMuteOutput, journal: failedMuteJournal)
+let failedMuteToken = failedMuteRuntime.begin(sessionID: UUID(), desired: runtimeConfig)!
+failedMuteRuntime.activate(token: failedMuteToken, now: 0)
+let failedMuteBefore = failedMuteOutput.devices[1]!
+failedMuteOutput.devices[1] = AudioDuckingOutputSnapshot(deviceID: 1, uid: "one", elements: [1], values: failedMuteBefore.values, muted: true)
+let invalidEvidence = Data("corrupt journal evidence".utf8)
+try invalidEvidence.write(to: failedMuteDirectory.appendingPathComponent("recovery-v1.json"))
+let failedMuteWrites = failedMuteOutput.writes.count
+check(!failedMuteRuntime.observeMuteChange(token: failedMuteToken), "failed mute persistence refuses successful reconciliation")
+check(failedMuteRuntime.failureReason == "journal_confirm_failed" && failedMuteRuntime.isQuarantined && failedMuteRuntime.status == .incomplete,
+      "failed mute persistence quarantines its ownership cycle")
+failedMuteRuntime.end(token: failedMuteToken, now: 1); failedMuteRuntime.tick(token: failedMuteToken, now: 5)
+check(failedMuteOutput.writes.count == failedMuteWrites, "failed mute persistence never issues a cleanup setter")
+let retainedInvalidEvidence = try Data(contentsOf: failedMuteDirectory.appendingPathComponent("recovery-v1.json"))
+check(retainedInvalidEvidence == invalidEvidence, "failed mute persistence preserves unresolved durable evidence")
+try FileManager.default.removeItem(at: failedMuteDirectory)
+print("Durable mute-only journal, restart and persistence-failure checks passed")

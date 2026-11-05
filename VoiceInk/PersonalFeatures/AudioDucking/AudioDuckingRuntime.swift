@@ -644,7 +644,20 @@ final class AudioDuckingRuntime {
         // A mute-only change is not a new volume choice. Preserve an explicit
         // queued percentage and any sampled fade instead of publishing an old
         // readback as a manual level adjustment.
-        if lease.lastConfirmed.map({ AudioDuckingOutputSnapshot.levelsMatch(current.values, $0) }) == true { return true }
+        if lease.lastConfirmed.map({ AudioDuckingOutputSnapshot.levelsMatch(current.values, $0) }) == true,
+           let baseline = lease.baseline {
+            // A crash must retain the newly observed mute metadata alongside
+            // the original volume obligation, without adopting a new level.
+            do { try persist(.confirmed, snapshot: current, baseline: baseline) }
+            catch {
+                failureReason = "journal_confirm_failed"
+                unresolvedWrite = true
+                cleanupUnsafe = true
+                relinquish(token: token, incomplete: true)
+                return false
+            }
+            return true
+        }
         return adoptUserLevel(current, token: token) && !unresolvedWrite
     }
 
