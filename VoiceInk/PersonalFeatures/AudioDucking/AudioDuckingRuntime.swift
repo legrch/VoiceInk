@@ -106,7 +106,6 @@ final class AudioDuckingRuntime {
         let desired: AudioDuckingConfiguration
         var activationRequested = false
         var endedAt: TimeInterval?
-        var retainedPercent: Double?
     }
     private var deferredBegin: DeferredBegin?
     var deferredBeginToken: AudioDuckingLease.Token? { deferredBegin?.token }
@@ -124,7 +123,13 @@ final class AudioDuckingRuntime {
         return !AudioDuckingOutputSnapshot.levelsMatch(confirmed, frame.values)
     }
     private(set) var transitionSettled = false
-    private var pendingRetainedPercent: Double?
+    private struct RetainedLevelIntent {
+        let percent: Double
+        var pending: Bool
+    }
+    // The selected value belongs to the ownership cycle, not to a Stop waiter
+    // or service pause buffer. Stop cancels its effect, never the selection.
+    private var retainedLevelIntent: RetainedLevelIntent?
     private(set) var manualAdjustment: (id: UUID, uid: String, percent: Double)?
 
     private func adoptUserLevel(_ current: AudioDuckingOutputSnapshot, token: AudioDuckingLease.Token) -> Bool {
@@ -144,13 +149,15 @@ final class AudioDuckingRuntime {
         ownership = ledger
         config.retainedPercent = percent
         effectiveConfiguration = config
+        retainedLevelIntent = RetainedLevelIntent(percent: percent, pending: false)
         manualAdjustment = (UUID(), current.uid, percent)
         return true
     }
 
     var hasPendingWrite: Bool { pendingWrite != nil }
+    var needsRecordingHandoff: Bool { pendingWrite != nil || deferredBegin != nil || hasUnfinishedAsyncFrame }
     var hasOwnershipCycle: Bool {
-        deferredBegin != nil || unresolvedWrite || pendingWrite != nil || (ownership?.states.contains { state in
+        lease.baseline != nil || deferredBegin != nil || unresolvedWrite || pendingWrite != nil || (ownership?.states.contains { state in
             switch state { case .owned, .uncertain: return true; case .untouched, .relinquished: return false }
         } ?? false)
     }
@@ -179,9 +186,9 @@ final class AudioDuckingRuntime {
     }
 
     @discardableResult
-    func begin(sessionID: UUID, desired: AudioDuckingConfiguration) -> AudioDuckingLease.Token? {
+    func begin(sessionID: UUID, desired: AudioDuckingConfiguration, deferUntilAdmitted: Bool = false) -> AudioDuckingLease.Token? {
         guard !unresolvedWrite else { status = .incomplete; return nil }
-        if pendingWrite != nil || deferredBegin != nil {
+        if deferUntilAdmitted || needsRecordingHandoff {
             // Keep the issued setter's token, listener and deadline alive. The
             // newest recording waits for its confirmation, never for the fade.
             guard desired.isValid, let previous = lease.token, lease.baseline != nil,
@@ -189,9 +196,7 @@ final class AudioDuckingRuntime {
                   !current.requiresInvalidation(comparedWith: initial) else { return nil }
             let next = AudioDuckingLease.Token(sessionID: sessionID,
                 generation: previous.generation &+ 1, cycleID: previous.cycleID)
-            let latestLevel = deferredBegin?.retainedPercent ?? pendingRetainedPercent
-            deferredBegin = DeferredBegin(token: next, desired: desired, retainedPercent: latestLevel)
-            pendingRetainedPercent = nil
+            deferredBegin = DeferredBegin(token: next, desired: desired)
             return next
         }
         return beginImmediately(sessionID: sessionID, desired: desired)
@@ -219,7 +224,12 @@ final class AudioDuckingRuntime {
                 relinquish(token: token, incomplete: true)
                 return nil
             }
+            if let intent = retainedLevelIntent {
+                effectiveConfiguration?.retainedPercent = intent.percent
+                retainedLevelIntent?.pending = false
+            }
         } else {
+            retainedLevelIntent = nil
             var effective = desired
             effective.retainedPercent = desired.retainedPercent(for: snapshot.uid)
             effectiveConfiguration = effective
@@ -260,7 +270,6 @@ final class AudioDuckingRuntime {
         if let stoppedAt = request.endedAt {
             end(token: next, now: stoppedAt)
         } else {
-            if let percent = request.retainedPercent { effectiveConfiguration?.retainedPercent = percent }
             if request.activationRequested { activate(token: next, now: now) }
         }
         return next
@@ -297,7 +306,7 @@ final class AudioDuckingRuntime {
             return
         }
         guard deferredBegin == nil, token == lease.token, let config = effectiveConfiguration else { return }
-        pendingRetainedPercent = nil
+        retainedLevelIntent?.pending = false
         // A system-volume/mute callback may still be queued when Stop arrives.
         // Reconcile its observed metadata before entering restoration state.
         if pendingWrite == nil { _ = observeMuteChange(token: token) }
@@ -316,20 +325,21 @@ final class AudioDuckingRuntime {
 
     /// Only the retained percentage is live; the original baseline remains
     /// owned until restoration and timing remains fixed for this cycle.
-    func updateRetainedPercent(_ percent: Double, token: AudioDuckingLease.Token, now: TimeInterval) {
+    func updateRetainedPercent(_ percent: Double, token: AudioDuckingLease.Token, now: TimeInterval,
+                               deferEffects: Bool = false) {
+        guard now.isFinite, percent.isFinite, (0...100).contains(percent) else { return }
         if deferredBegin?.token == token {
-            if deferredBegin?.endedAt == nil, percent.isFinite, (0...100).contains(percent) {
-                deferredBegin?.retainedPercent = percent
-            }
+            retainedLevelIntent = RetainedLevelIntent(percent: percent, pending: deferredBegin?.endedAt == nil)
             return
         }
-        guard deferredBegin == nil, token == lease.token, !lease.suppressed, !lease.ended, !lease.restoring,
-              now.isFinite, percent.isFinite, (0...100).contains(percent),
+        guard deferredBegin == nil, token == lease.token, !lease.suppressed,
               var config = effectiveConfiguration, config.mode == .duck else { return }
-        if pendingWrite != nil || asyncFrame.map({ !AudioDuckingOutputSnapshot.levelsMatch(lease.lastConfirmed ?? [], $0.values) }) == true {
-            pendingRetainedPercent = percent
-            return
-        }
+        retainedLevelIntent = RetainedLevelIntent(percent: percent, pending: !lease.ended && !lease.restoring)
+        // A settings change after Stop is remembered for an inherited recording,
+        // but must never retarget the old restoration.
+        guard !lease.ended, !lease.restoring else { return }
+        if deferEffects || pendingWrite != nil || hasUnfinishedAsyncFrame { return }
+        retainedLevelIntent?.pending = false
         asyncFrame = nil
         config.retainedPercent = percent
         effectiveConfiguration = config
@@ -340,6 +350,17 @@ final class AudioDuckingRuntime {
             transitionSettled = false
             tick(token: token, now: now)
         }
+    }
+
+    /// The service resumes only after the exact mute observation is reconciled.
+    /// A pending write/frame consumes this same intent through volumeChanged.
+    @discardableResult
+    func resumeRetainedPercent(token: AudioDuckingLease.Token, now: TimeInterval) -> Bool {
+        guard deferredBegin == nil, token == lease.token, !lease.ended, !lease.restoring,
+              !lease.suppressed, normalWriteAllowed(token), pendingWrite == nil,
+              !hasUnfinishedAsyncFrame, let intent = retainedLevelIntent, intent.pending else { return false }
+        updateRetainedPercent(intent.percent, token: token, now: now)
+        return true
     }
 
     func tick(token: AudioDuckingLease.Token, now: TimeInterval) {
@@ -507,6 +528,7 @@ final class AudioDuckingRuntime {
                     return
                 }
                 lease.finishRestore(token: token)
+                retainedLevelIntent = nil
                 ownership = nil
                 beginSnapshot = nil
                 effectiveConfiguration = nil
@@ -597,11 +619,11 @@ final class AudioDuckingRuntime {
             if hasUnfinishedAsyncFrame { tick(token: token, now: now) }
             return
         }
-        if let percent = pendingRetainedPercent,
+        if let intent = retainedLevelIntent, intent.pending,
            asyncFrame.map({ AudioDuckingOutputSnapshot.levelsMatch(current.values, $0.values) }) ?? true {
-            pendingRetainedPercent = nil
+            retainedLevelIntent?.pending = false
             asyncFrame = nil
-            updateRetainedPercent(percent, token: token, now: now)
+            updateRetainedPercent(intent.percent, token: token, now: now)
             return
         }
         tick(token: token, now: now)
@@ -619,6 +641,10 @@ final class AudioDuckingRuntime {
         beginSnapshot = AudioDuckingOutputSnapshot(deviceID: initial.deviceID, uid: initial.uid,
             elements: initial.elements, values: initial.values, muted: current.muted, control: initial.control,
             stereoChannels: initial.stereoChannels, balance: initial.balance, channelLayout: initial.channelLayout)
+        // A mute-only change is not a new volume choice. Preserve an explicit
+        // queued percentage and any sampled fade instead of publishing an old
+        // readback as a manual level adjustment.
+        if lease.lastConfirmed.map({ AudioDuckingOutputSnapshot.levelsMatch(current.values, $0) }) == true { return true }
         return adoptUserLevel(current, token: token) && !unresolvedWrite
     }
 
@@ -634,7 +660,7 @@ final class AudioDuckingRuntime {
         guard token == lease.token else { return }
         deferredBegin = nil
         asyncFrame = nil
-        pendingRetainedPercent = nil
+        retainedLevelIntent = nil
         if pendingWrite != nil {
             pendingWrite = nil
             unresolvedWrite = true
@@ -705,7 +731,7 @@ final class AudioDuckingRuntime {
         guard token == lease.token else { return }
         lease.invalidate(token: token)
         ownership = nil
-        pendingRetainedPercent = nil
+        retainedLevelIntent = nil
         cleanupUnsafe = false
         beginSnapshot = nil
         effectiveConfiguration = nil

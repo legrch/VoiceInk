@@ -17,7 +17,6 @@ final class AudioDuckingService {
     private var deferredVolumeObservation: (AudioDuckingLease.Token, AudioDuckingOutputSnapshot)?
     private var deferredStop: AudioDuckingLease.Token?
     private var deferredActivation: AudioDuckingLease.Token?
-    private var deferredRetainedLevel: (AudioDuckingLease.Token, Double)?
     private var recoveryBlocked = false
     private var recoveryContinuityLost = false
     private var unsettledWrites = AudioDuckingUnsettledWrites()
@@ -219,15 +218,20 @@ final class AudioDuckingService {
                 return nil
             }
             guard !recoveryBlocked else { publishStatus(.incomplete); return nil }
-            if runtime.hasPendingWrite || runtime.deferredBeginToken != nil {
-                // Preserve the real in-flight operation and its listener. It
-                // confirms on the old token, then hands ownership to the latest
-                // recording. Capture and its 220 ms trigger remain independent.
+            if runtime.lease.baseline != nil || runtime.needsRecordingHandoff {
+                // Every captured cycle uses the same atomic handoff, including
+                // a settled level or a partial frame paused between setters.
+                // A mute pause is reconciled rather than consumed as revocation.
+                // Capture and its 220 ms trigger remain independent.
                 guard let current = runtime.lease.token,
                       latch.permits(current) || latch.isMutePaused(current) else { return nil }
-                let token = runtime.begin(sessionID: sessionID, desired: desired)
+                guard let token = runtime.begin(sessionID: sessionID, desired: desired, deferUntilAdmitted: true) else {
+                    publishStatus(runtime.status)
+                    return nil
+                }
+                _ = completeDeferredBeginIfReady()
                 publishStatus(runtime.status)
-                return token
+                return runtime.deferredBeginToken == token || runtime.lease.token == token ? token : nil
             }
             timer?.cancel()
             timer = nil
@@ -337,7 +341,10 @@ final class AudioDuckingService {
                 return
             }
             guard let token = self.runtime.lease.token else { return }
-            if self.latch.isMutePaused(token) { self.deferredRetainedLevel = (token, percent); return }
+            if self.latch.isMutePaused(token) {
+                self.runtime.updateRetainedPercent(percent, token: token, now: ProcessInfo.processInfo.systemUptime, deferEffects: true)
+                return
+            }
             guard self.latch.permits(token) else { return }
             self.runtime.updateRetainedPercent(percent, token: token, now: ProcessInfo.processInfo.systemUptime)
             self.publishStatus(self.runtime.status)
@@ -373,7 +380,6 @@ final class AudioDuckingService {
             if stopped {
                 self.deferredStop = nil
                 self.deferredActivation = nil
-                self.deferredRetainedLevel = nil
                 self.runtime.end(token: token, now: ProcessInfo.processInfo.systemUptime)
             } else {
                 if self.deferredActivation == token {
@@ -381,9 +387,7 @@ final class AudioDuckingService {
                     self.runtime.activate(token: token, now: ProcessInfo.processInfo.systemUptime)
                     needsSchedule = true
                 }
-                if let (levelToken, percent) = self.deferredRetainedLevel, levelToken == token {
-                    self.deferredRetainedLevel = nil
-                    self.runtime.updateRetainedPercent(percent, token: token, now: ProcessInfo.processInfo.systemUptime)
+                if self.runtime.resumeRetainedPercent(token: token, now: ProcessInfo.processInfo.systemUptime) {
                     needsSchedule = true
                 }
             }
@@ -419,7 +423,6 @@ final class AudioDuckingService {
         deferredVolumeObservation = nil
         deferredStop = nil
         deferredActivation = nil
-        deferredRetainedLevel = nil
         for (device, var address, callback) in deviceListeners {
             AudioObjectRemovePropertyListenerBlock(device, &address, notificationQueue, callback)
         }

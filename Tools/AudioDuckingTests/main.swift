@@ -130,7 +130,12 @@ final class FakeOutput: AudioDuckingOutput {
     var onWrite: (() -> Void)?
     var beforeAdapterCheck: (() -> Void)?
     var beforeOwnedCheck: (() -> Void)?
-    func readDefault() -> AudioDuckingOutputSnapshot? { hideDefault ? nil : devices[selected] }
+    var onReadDefault: (() -> Void)?
+    func readDefault() -> AudioDuckingOutputSnapshot? {
+        let snapshot = hideDefault ? nil : devices[selected]
+        onReadDefault?()
+        return snapshot
+    }
     func readNamed(deviceID: UInt32) -> AudioDuckingOutputSnapshot? { devices[deviceID] }
     func canonicalTarget(deviceID: UInt32, element: UInt32, value: Float) -> Float? {
         guard predictsQuantization, let step = quantizationStep else { return value }
@@ -1539,3 +1544,192 @@ for path in ["queued-active", "superseded-deferred", "latest-level"] {
     check(output.devices[1]!.values == [0.6], "carried percentage never changes the pre-recording baseline")
 }
 print("Mid-admission lifecycle race and queued percentage carry regression checks passed")
+
+// One runtime-owned selected level spans active writes, Stop, mute pauses and
+// every inherited recording. Service pause handling uses these exact APIs.
+for values: [Float] in [[0.6], [0.6, 0.3]] {
+    for phase in ["pending", "settled", "partial", "restored"] {
+        if phase == "partial" && values.count == 1 { continue }
+        for stopBeforeBegin in [false, true] {
+            for replace in [false, true] {
+                let output = makeOutput(values)
+                output.requiresWriteNotification = true
+                output.deferWrites = true
+                let latch = AudioDuckingEventLatch()
+                let runtime = AudioDuckingRuntime(output: output, normalWriteAllowed: { latch.permits($0) })
+                var cfg = runtimeConfig; cfg.restoreDelaySeconds = 0
+                let a = runtime.begin(sessionID: UUID(), desired: cfg)!
+                check(latch.admit(a, observedEpoch: latch.currentEpoch()), "unified intent fixture admitted")
+                runtime.activate(token: a, now: 0)
+                var clock = 0.0
+                var pause: UInt64?
+                if phase == "settled" || phase == "restored" {
+                    driveAsyncTransition(runtime, output, token: a, untilIdle: false, clock: &clock)
+                }
+                if phase == "restored" {
+                    clock += 0.1
+                    runtime.end(token: a, now: clock)
+                    runtime.tick(token: a, now: clock)
+                    if values.count == 2 {
+                        output.deliverPendingWrite()
+                        runtime.volumeChanged(token: a, now: clock + 0.01)
+                    }
+                }
+                if phase == "partial" || phase == "restored" {
+                    output.deliverPendingWrite()
+                    output.onReadDefault = { output.onReadDefault = nil; pause = latch.pause(ifCurrent: a) }
+                    runtime.volumeChanged(token: a, now: clock + 0.02)
+                    check(!runtime.hasPendingWrite, "acknowledgement can finish before the pause blocks another setter")
+                    if phase == "partial" { check(runtime.needsRecordingHandoff, "an unfinished stereo frame is still a handoff obligation") }
+                } else { pause = latch.pause(ifCurrent: a) }
+                check(pause != nil && runtime.lease.baseline == values && runtime.hasOwnershipCycle,
+                      "every captured paused baseline retains its ownership cycle")
+                let writes = output.writes.count
+                runtime.updateRetainedPercent(55, token: a, now: clock + 0.03, deferEffects: true)
+                if stopBeforeBegin { runtime.end(token: a, now: clock + 0.04) }
+                var desired = cfg; desired.retainedPercent = 55
+                var next = runtime.begin(sessionID: UUID(), desired: desired, deferUntilAdmitted: true)!
+                if replace {
+                    runtime.updateRetainedPercent(60, token: next, now: clock + 0.05)
+                    next = runtime.begin(sessionID: UUID(), desired: desired, deferUntilAdmitted: true)!
+                }
+                runtime.activate(token: next, now: clock + 0.22)
+                check(runtime.lease.token == a && output.writes.count == writes,
+                      "mute-paused pending, settled, partial and restored states never advance early")
+                check(runtime.observeMuteChange(token: a) && latch.resume(a, after: pause!), "reconcile only the observed mute pause")
+                // Models the old Stop buffered in the service: it cannot erase
+                // a newer recording's selected percentage or restoration duty.
+                runtime.end(token: a, now: clock + 0.23)
+                check(!runtime.resumeRetainedPercent(token: a, now: clock + 0.24), "the old token cannot consume the new recording's intent")
+                for _ in 0..<3 {
+                    clock += 0.1
+                    if runtime.hasPendingWrite {
+                        output.deliverPendingWrite()
+                        runtime.volumeChanged(token: a, now: clock)
+                    } else { runtime.tick(token: a, now: clock) }
+                    if runtime.deferredBeginReady { break }
+                }
+                check(runtime.deferredBeginReady, "finish only the already sampled frame before transferring captured ownership")
+                check(runtime.completeDeferredBegin(now: clock, admit: { old, new, _ in latch.handoff(from: old, to: new) }) == next,
+                      "all paused ownership states admit the deferred recording after reconciliation")
+                let expected: Double = replace ? 60 : 55
+                check(runtime.effectiveConfiguration?.retainedPercent == expected && runtime.lease.baseline == values,
+                      "latest selected percentage survives pause, Stop and repeated begin")
+                driveAsyncTransition(runtime, output, token: next, untilIdle: false, clock: &clock)
+                check(AudioDuckingOutputSnapshot.levelsMatch(output.devices[1]!.values, values.map { $0 * Float(expected / 100) }),
+                      "resumed hardware level matches the selected percentage")
+                runtime.end(token: next, now: clock)
+                driveAsyncTransition(runtime, output, token: next, untilIdle: true, clock: &clock)
+                check(output.devices[1]!.values == values && !runtime.hasOwnershipCycle && !runtime.isQuarantined,
+                      "every paused-state path restores baseline and releases ownership")
+            }
+        }
+    }
+}
+
+for updateAfterStop in [false, true] {
+    let output = makeOutput([0.6]); output.requiresWriteNotification = true; output.deferWrites = true
+    let runtime = AudioDuckingRuntime(output: output)
+    let a = runtime.begin(sessionID: UUID(), desired: runtimeConfig)!
+    runtime.activate(token: a, now: 0)
+    if !updateAfterStop { runtime.updateRetainedPercent(55, token: a, now: 0.01) }
+    runtime.end(token: a, now: 0.02)
+    if updateAfterStop { runtime.updateRetainedPercent(55, token: a, now: 0.03) }
+    var desired = runtimeConfig; desired.retainedPercent = 55
+    let b = runtime.begin(sessionID: UUID(), desired: desired)!
+    runtime.activate(token: b, now: 0.22)
+    output.deliverPendingWrite(); runtime.volumeChanged(token: a, now: 0.3)
+    check(runtime.completeDeferredBegin(now: 0.31, admit: { _, _, _ in true }) == b, "Stop fixture binds replacement")
+    check(runtime.effectiveConfiguration?.retainedPercent == 55, "Stop cancels the old effect, not the selected level")
+    var clock = 0.4
+    driveAsyncTransition(runtime, output, token: b, untilIdle: false, clock: &clock)
+    check(AudioDuckingOutputSnapshot.levelsMatch(output.devices[1]!.values, [0.33]), "Stop handoff targets selected 55 percent")
+    runtime.end(token: b, now: clock)
+    driveAsyncTransition(runtime, output, token: b, untilIdle: true, clock: &clock)
+    check(output.devices[1]!.values == [0.6], "Stop handoff preserves original baseline")
+}
+
+// A real mute-only change must not publish the old level over a queued choice.
+let selectedMuteOutput = makeOutput([0.6]); selectedMuteOutput.requiresWriteNotification = true; selectedMuteOutput.deferWrites = true
+let selectedMuteLatch = AudioDuckingEventLatch()
+let selectedMuteRuntime = AudioDuckingRuntime(output: selectedMuteOutput, normalWriteAllowed: { selectedMuteLatch.permits($0) })
+let selectedMuteToken = selectedMuteRuntime.begin(sessionID: UUID(), desired: runtimeConfig)!
+check(selectedMuteLatch.admit(selectedMuteToken, observedEpoch: selectedMuteLatch.currentEpoch()), "selected mute fixture admitted")
+selectedMuteRuntime.activate(token: selectedMuteToken, now: 0)
+var selectedMuteClock = 0.0
+driveAsyncTransition(selectedMuteRuntime, selectedMuteOutput, token: selectedMuteToken, untilIdle: false, clock: &selectedMuteClock)
+let selectedMuteEpoch = selectedMuteLatch.pause(ifCurrent: selectedMuteToken)!
+selectedMuteRuntime.updateRetainedPercent(55, token: selectedMuteToken, now: 0.1, deferEffects: true)
+let sameLevel = selectedMuteOutput.devices[1]!
+selectedMuteOutput.devices[1] = AudioDuckingOutputSnapshot(deviceID: sameLevel.deviceID, uid: sameLevel.uid, elements: sameLevel.elements, values: sameLevel.values, muted: true)
+check(selectedMuteRuntime.observeMuteChange(token: selectedMuteToken) && selectedMuteRuntime.manualAdjustment == nil,
+      "mute-only metadata is not a new manual volume selection")
+check(selectedMuteLatch.resume(selectedMuteToken, after: selectedMuteEpoch), "resume actual mute metadata")
+check(selectedMuteRuntime.resumeRetainedPercent(token: selectedMuteToken, now: 0.2), "resume the sole runtime-owned queued choice")
+selectedMuteClock = 0.2
+driveAsyncTransition(selectedMuteRuntime, selectedMuteOutput, token: selectedMuteToken, untilIdle: false, clock: &selectedMuteClock)
+check(selectedMuteRuntime.effectiveConfiguration?.retainedPercent == 55, "mute reconciliation preserves selected percentage")
+selectedMuteRuntime.end(token: selectedMuteToken, now: selectedMuteClock)
+driveAsyncTransition(selectedMuteRuntime, selectedMuteOutput, token: selectedMuteToken, untilIdle: true, clock: &selectedMuteClock)
+check(selectedMuteOutput.devices[1]!.values == [0.6] && selectedMuteOutput.devices[1]!.muted == true,
+      "restoration keeps original volume without writing the owner's mute state")
+print("Unified selected-level, Stop and captured mute-pause state matrix passed")
+
+for retained in [20.0, 100.0] {
+    for baseline: [Float] in [[0.6], [0.6, 0.3]] {
+        let output = makeOutput(baseline); output.requiresWriteNotification = true; output.deferWrites = true
+        let latch = AudioDuckingEventLatch()
+        let runtime = AudioDuckingRuntime(output: output, normalWriteAllowed: { latch.permits($0) })
+        var cfg = runtimeConfig; cfg.retainedPercent = retained; cfg.restoreDelaySeconds = 0
+        let a = runtime.begin(sessionID: UUID(), desired: cfg)!
+        check(latch.admit(a, observedEpoch: latch.currentEpoch()), "captured-cycle fixture admitted")
+        runtime.activate(token: a, now: 0)
+        var clock = 0.0
+        driveAsyncTransition(runtime, output, token: a, untilIdle: false, clock: &clock)
+        let count = output.writes.count
+        var changed = cfg; changed.mode = .unchanged; changed.fadeUpSeconds = 9
+        let b = runtime.begin(sessionID: UUID(), desired: changed, deferUntilAdmitted: true)!
+        check(runtime.completeDeferredBegin(now: clock, admit: { old, new, _ in latch.handoff(from: old, to: new) }) == b,
+              "settled and untouched captured cycles use atomic admission too")
+        check(output.writes.count == count && runtime.lease.baseline == baseline,
+              "normal captured-cycle handoff never bypasses activation grace")
+        check(runtime.effectiveConfiguration == cfg, "mode and timing remain fixed for captured ownership cycle")
+        runtime.activate(token: b, now: clock + 0.22)
+        clock += 0.22
+        driveAsyncTransition(runtime, output, token: b, untilIdle: false, clock: &clock)
+        runtime.end(token: b, now: clock)
+        driveAsyncTransition(runtime, output, token: b, untilIdle: true, clock: &clock)
+        check(output.devices[1]!.values == baseline && !runtime.hasOwnershipCycle,
+              "captured-cycle admission including 100 percent releases ownership without extra effects")
+    }
+}
+
+let capturedJournalDirectory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("voiceink-captured-final-\(UUID().uuidString)")
+let capturedJournal = try AudioDuckingRecoveryJournal(directory: capturedJournalDirectory)
+let capturedOutput = makeOutput([0.6]); capturedOutput.requiresWriteNotification = true; capturedOutput.deferWrites = true
+let capturedLatch = AudioDuckingEventLatch()
+let capturedRuntime = AudioDuckingRuntime(output: capturedOutput, journal: capturedJournal, normalWriteAllowed: { capturedLatch.permits($0) })
+var capturedConfig = runtimeConfig; capturedConfig.restoreDelaySeconds = 0
+let capturedA = capturedRuntime.begin(sessionID: UUID(), desired: capturedConfig)!
+check(capturedLatch.admit(capturedA, observedEpoch: capturedLatch.currentEpoch()), "final captured journal admitted")
+capturedRuntime.activate(token: capturedA, now: 0)
+capturedOutput.deliverPendingWrite(); capturedRuntime.volumeChanged(token: capturedA, now: 0.1)
+capturedRuntime.end(token: capturedA, now: 0.2); capturedRuntime.tick(token: capturedA, now: 0.2)
+capturedOutput.deliverPendingWrite()
+var capturedPause: UInt64?
+capturedOutput.onReadDefault = { capturedOutput.onReadDefault = nil; capturedPause = capturedLatch.pause(ifCurrent: capturedA) }
+capturedRuntime.volumeChanged(token: capturedA, now: 0.3)
+check(capturedRuntime.lease.baseline == [0.6] && !capturedRuntime.hasPendingWrite && capturedRuntime.hasOwnershipCycle,
+      "confirmed baseline still has a cycle until restoration is finalized")
+let admittedCapturedJournal = try capturedJournal.prepareRecordingCycle(inheriting: capturedA.cycleID, selectedUID: "one")
+check(admittedCapturedJournal, "same captured cycle remains valid against its durable confirmed record")
+let capturedB = capturedRuntime.begin(sessionID: UUID(), desired: capturedConfig, deferUntilAdmitted: true)!
+check(capturedRuntime.observeMuteChange(token: capturedA) && capturedLatch.resume(capturedA, after: capturedPause!), "resume final restoration observation")
+check(capturedRuntime.completeDeferredBegin(now: 0.4, admit: { old, new, _ in capturedLatch.handoff(from: old, to: new) }) == capturedB,
+      "last-frame confirmed baseline hands off without orphaning durable recovery")
+capturedRuntime.end(token: capturedB, now: 0.5)
+var capturedClock = 0.5
+driveAsyncTransition(capturedRuntime, capturedOutput, token: capturedB, untilIdle: true, clock: &capturedClock)
+if case .absent = try capturedJournal.read() {} else { check(false, "completed inherited cycle clears its own durable record") }
+try FileManager.default.removeItem(at: capturedJournalDirectory)
+print("Normal, 100-percent and final-confirmed captured-cycle checks passed")
