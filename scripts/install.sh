@@ -3,7 +3,7 @@
 set -euo pipefail
 VERSION=personal-2.25.1
 ASSET=VoiceInk-Personal-2.25.1-AppleSilicon.zip
-ARCHIVE_SHA256=a5cbc21b7e752a864e0157ad71939410bd43e088ed282dfc5f1c4f771793a8ed
+ARCHIVE_SHA256=0157252ebae23b12b9b13b84f9fcc188a15bae1fab61ff171cdf30abdbdf4cda
 CERT_SHA256=fbb0182020b4091415f9ee73f17b156010daac2291f3f700a85ba4c5d7dbdb89
 BUNDLE_ID=com.prakashjoshipax.VoiceInk
 
