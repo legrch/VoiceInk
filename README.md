@@ -36,6 +36,10 @@ In **Audio > Audio Ducking**, enable **Lower Audio While Recording**. Turn off *
 
 The package does not include anyone's settings, API keys, transcription models or machine-specific Karabiner mappings. Choose your own shortcut in VoiceInk. Automatic updates are disabled; install subsequent personal releases explicitly. Intel builds are not provided in this release.
 
+## Upstream 2.25 compatibility notes
+
+This fork retains these known upstream behaviors: vocabulary correction applies when terms are configured even if an older opt-out preference exists; website modes match host/path and query- or fragment-specific rules may need adjustment; after importing older Soniox modes, restart before using or editing them; very large Auto-Learn AI-review backlogs can stall and may require manual dictionary review. These optional-feature limits do not change the personal audio-ducking settings.
+
 ## Fork development
 
 - `main` is the stable personal fork; use feature branches and reviewed `--no-ff` merge commits (no squash or rebase merges).
