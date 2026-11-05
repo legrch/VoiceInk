@@ -1,37 +1,34 @@
-# VoiceInk Personal
+# VoiceInk
 
-A personal fork of [Beingpax/VoiceInk](https://github.com/Beingpax/VoiceInk), with smooth audio ducking during dictation, per-output background levels and restoration of the original volume. The first personal release is based on the owner-tested `78cdb94d7c8875687124421adc667c9dbbd8de2b` application, with recovery and lifecycle ordering fixes found during release review.
+<img src="VoiceInk/Assets.xcassets/AppIcon.appiconset/256-mac.png" alt="VoiceInk" width="96" align="right" />
 
-**[Download the ready-to-use application](https://github.com/legrch/VoiceInk/releases/latest)** · Apple Silicon (M1 or later) · macOS 15+
+Voice dictation for macOS, with smooth background-audio ducking. Music gets quieter while you speak and returns to its original volume when recording stops.
 
-## Install
+**[Download the app](https://github.com/legrch/VoiceInk/releases/latest)** · **Apple Silicon** · **macOS 15+**
 
-No Xcode, Git, patches or signing certificate are needed to install a release.
+- Smooth fade down and back up, without waiting for transcription.
+- Background volume remembered separately for speakers and headphones.
+- First installation and updates through the same command below.
 
-1. Download the application ZIP from Releases and extract it.
-2. Quit any existing VoiceInk with **Command-Q**. Keep a copy of the old app and export its settings before replacing it manually.
-3. Move `VoiceInk.app` into **Applications**, then open that copy.
-4. This release is locally signed, **not Apple-notarized**. If macOS cannot verify the developer, approve only this trusted copy in **System Settings > Privacy & Security > Open Anyway**. See [Apple's instructions](https://support.apple.com/en-gb/102445). The installer does not disable Gatekeeper or remove quarantine attributes.
-5. Complete first-run setup: microphone/Accessibility permissions, a transcription model or your own provider settings, and your preferred recording shortcut.
+## Install or update
 
-### Optional terminal installer
+Quit VoiceInk, then paste this one command into Terminal:
 
-For either first installation or replacement, quit VoiceInk and copy the whole block below. The installer downloads the pinned release, checks its SHA-256 and signing certificate, makes a backup, and installs without launching. It supports first installation and upgrades. The command pins the installer source commit and checks its SHA-256 before executing:
-
-```bash
-voiceink_installer=$(mktemp /tmp/voiceink-personal-install.XXXXXXXX)
-curl --fail --location --proto '=https' --proto-redir '=https' \
-  https://raw.githubusercontent.com/legrch/VoiceInk/7852619a59ba84f34e386019c55eaf8fa1ba5eeb/scripts/install.sh \
-  -o "$voiceink_installer" &&
-printf '79c58536608561c4b0c22a99f93f1a65e87aace155837b6287cca394556a2751  %s\n' "$voiceink_installer" | shasum -a 256 -c - &&
-bash "$voiceink_installer" --version latest --replace-existing
+```sh
+curl -fsSL https://raw.githubusercontent.com/legrch/VoiceInk/main/scripts/install-release.sh | sh -s -- latest
 ```
 
-`--version latest` selects the newest release pinned by this installer; `--version personal-2.25.1` selects it explicitly. Unsupported versions fail before changing anything. Use the current command from this page for a later release; the pinned installer never silently trusts new remote hashes.
+The same command handles first installation and updates. It verifies the pinned installer, release archive and app signature, backs up an existing app and its data, and installs to `/Applications/VoiceInk.app` with rollback on replacement failure. Then open **VoiceInk** from Applications. No Xcode, Git, patches, signing certificate or sudo is needed.
 
-Keep VoiceInk closed until installation finishes. The command explicitly permits replacement of an existing signed VoiceInk and backs it up; omit `--replace-existing` to refuse migration from a different certificate. macOS may ask for permissions again. Do not use sudo. An unwritable Applications directory can be avoided with `--destination "$HOME/Applications/VoiceInk.app"` after creating that directory; custom destinations keep app-only backups beside the app.
+This command trusts the bootstrap script maintained in this fork's `main`; it checks the immutable installation payload before executing it. `latest` currently selects **personal-2.25.1**. Future published releases update the reviewed bootstrap pins, so the command stays the same. To select this release explicitly, replace `latest` with `personal-2.25.1`.
 
-Default-location backups are under `~/Library/Application Support/VoiceInk-Personal-Backups/release.*`, including the previous app (when present), application support, custom recording sounds and preferences. Failed replacement attempts restore the original app or preserve the exact recovery staging path. For a manual rollback, quit VoiceInk, move the new app aside and copy the backed-up `VoiceInk.app` into Applications. Normal installation does not modify user data; retain the data backup if a later app launch migrates it.
+**Apple Silicon (M1 or later), macOS 15+.** This build is locally signed, **not Apple-notarized**. If macOS asks, approve this trusted copy in **System Settings > Privacy & Security > Open Anyway** ([Apple's instructions](https://support.apple.com/en-gb/102445)). First launch uses VoiceInk's normal microphone/Accessibility and model/provider setup. The installer never changes Gatekeeper or creates a personal profile on your behalf.
+
+Backups are under `~/Library/Application Support/VoiceInk-Personal-Backups/release.*`: the previous app, application support, custom recording sounds and preferences. For rollback, quit VoiceInk, move the new app aside and copy the backed-up `VoiceInk.app` into Applications. Installation leaves user data in place; retain the data backup if a later launch migrates it.
+
+For a custom destination, add `--destination "$HOME/Applications/VoiceInk.app"` after `latest` (create that directory first); custom destinations retain app-only backups beside the app. Keep VoiceInk closed until installation finishes. The command permits replacement of an existing signed VoiceInk and always preserves a backup.
+
+You can also [download the ZIP](https://github.com/legrch/VoiceInk/releases/latest), extract it, and move `VoiceInk.app` into Applications after quitting and preserving your previous copy. For a fully pinned installation command with the bootstrap verified before execution, see the [existing release instructions](https://github.com/legrch/VoiceInk/releases/tag/personal-2.25.1).
 
 ## Set up audio ducking
 
@@ -55,116 +52,9 @@ Canceling a batch transcription can leave recording temporarily unavailable unti
 - `upstream` points to `Beingpax/VoiceInk`; `origin` points to `legrch/VoiceInk`.
 - Bring an upstream release into an update branch based on our `main` with a merge, resolve conflicts, run tests/build, then review and merge. Preserve published history; do not rebase or force-push `main`.
 - `personal/build` retains the original implementation history. `scripts/personal-update.sh` is a legacy **source rebase** helper for that branch, not an end-user updater; it is not the update procedure for stable main.
-- `Tools/AudioDuckingTests/run.sh` runs the audio checks. `scripts/personal-build.sh` builds from source using Xcode and a local signing identity (`VOICEINK_SIGNING_IDENTITY`); it never publishes or installs. The old `personal-install.sh` is a machine-local replacement helper requiring an existing matching certificate. For downloaded releases use `scripts/install.sh`.
+- `Tools/AudioDuckingTests/run.sh` runs the audio checks. `scripts/personal-build.sh` builds from source using Xcode and a local signing identity (`VOICEINK_SIGNING_IDENTITY`); it never publishes or installs. The old `personal-install.sh` is a machine-local replacement helper requiring an existing matching certificate. For downloaded releases use `scripts/install-release.sh`; `scripts/install.sh` is its immutable installation payload.
 - The application source and bundled licenses remain available under GPL v3; upstream attribution is retained below. No background update service or release automation is installed.
 
-## Original VoiceInk project
+## Credits and license
 
-<div align="center">
-  <img src="VoiceInk/Assets.xcassets/AppIcon.appiconset/256-mac.png" width="180" height="180" />
-  <h1>VoiceInk</h1>
-  <p>Voice to text app for macOS to transcribe what you say to text almost instantly</p>
-
-  [![License](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-  ![Platform](https://img.shields.io/badge/platform-macOS%2015.0%2B-brightgreen)
-  [![GitHub release (latest by date)](https://img.shields.io/github/v/release/Beingpax/VoiceInk)](https://github.com/Beingpax/VoiceInk/releases)
-  ![GitHub all releases](https://img.shields.io/github/downloads/Beingpax/VoiceInk/total)
-  ![GitHub stars](https://img.shields.io/github/stars/Beingpax/VoiceInk?style=social)
-  <p>
-    <a href="https://tryvoiceink.com">Website</a> •
-    <a href="https://www.youtube.com/@tryvoiceink">YouTube</a>
-  </p>
-
-  <a href="https://tryvoiceink.com">
-    <img src="https://img.shields.io/badge/Download%20Now-Latest%20Version-blue?style=for-the-badge&logo=apple" alt="Download VoiceInk" width="250"/>
-  </a>
-</div>
-
----
-
-VoiceInk is a native macOS application that transcribes what you say to text almost instantly. You can find all the information and download the app from [here](https://tryvoiceink.com). 
-
-![VoiceInk Mac App](https://github.com/user-attachments/assets/12367379-83e7-48a6-b52c-4488a6a04bba)
-
-After dedicating the past 5 months to developing this app, I've decided to open source it for the greater good. 
-
-My goal is to make it **the most efficient and privacy-focused voice-to-text solution for macOS** that is a joy to use. While the source code is now open for experienced developers to build and contribute, purchasing a license helps support continued development and gives you access to automatic updates, priority support, and upcoming features.
-
-## Features
-
-- 🎙️ **Accurate Transcription**: Local AI models that transcribe your voice to text with 99% accuracy, almost instantly
-- 🔒 **Privacy First**: 100% offline processing ensures your data never leaves your device
-- ⚡ **Modes**: Intelligent app detection automatically applies your perfect pre-configured settings based on the app/ URL you're on
-- 🧠 **Context Aware**: Smart AI that understands your screen content and adapts to the context
-- 🎯 **Global Shortcuts**: Configurable keyboard or mouse shortcuts for quick recording and push-to-talk functionality
-- 📝 **Personal Dictionary**: Train the AI to understand your unique terminology with custom words, industry terms, and smart text replacements
-- 🔄 **Smart Modes**: Instantly switch between AI-powered modes optimized for different writing styles and contexts
-- 🤖 **AI Assistant**: Built-in voice assistant mode for a quick chatGPT like conversational assistant
-
-## Get Started
-
-### Download
-Get the latest version with a free trial from [tryvoiceink.com](https://tryvoiceink.com). Your purchase helps me work on VoiceInk full-time and continuously improve it with new features and updates.
-
-#### Homebrew
-Alternatively, you can install VoiceInk via `brew`:
-
-```shell
-brew install --cask voiceink
-```
-
-### Build from Source
-As an open-source project, you can build VoiceInk yourself by following the instructions in [BUILDING.md](BUILDING.md). However, the compiled version includes additional benefits like automatic updates, priority support via Discord and email, and helps fund ongoing development.
-
-## Requirements
-
-- macOS 15.0 or later
-
-## Documentation
-
-- [Building from Source](BUILDING.md) - Detailed instructions for building the project
-- [Contributing Guidelines](CONTRIBUTING.md) - How to contribute to VoiceInk
-- [Code of Conduct](CODE_OF_CONDUCT.md) - Our community standards
-
-## Contributing
-
-This project is **not accepting pull requests** at this time. You're welcome to fork and modify VoiceInk for your own use.
-
-You can still contribute by:
-- Reporting bugs via [issues](https://github.com/Beingpax/VoiceInk/issues)
-- Suggesting features or enhancements
-- Improving documentation via issues
-
-For more details, see our [Contributing Guidelines](CONTRIBUTING.md). For build instructions, see our [Building Guide](BUILDING.md).
-
-## License
-
-This project is licensed under the GNU General Public License v3.0 - see the [LICENSE](LICENSE) file for details.
-
-## Support
-
-If you encounter any issues or have questions, please:
-1. Check the existing issues in the GitHub repository
-2. Create a new issue if your problem isn't already reported
-3. Provide as much detail as possible about your environment and the problem
-
-## Acknowledgments
-
-### Core Technology
-- [whisper.cpp](https://github.com/ggerganov/whisper.cpp) - High-performance inference of OpenAI's Whisper model
-- [FluidAudio](https://github.com/FluidInference/FluidAudio) - Used for Parakeet model implementation
-- [TranscribeCpp for Swift](https://github.com/Beingpax/Transcribe-cpp-swift) - SwiftPM distribution of [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp), used for local GGUF transcription models
-- [SenseVoice Small](https://huggingface.co/FunAudioLLM/SenseVoiceSmall) by FunAudioLLM / Alibaba - Multilingual model available under the [FunASR Model Open Source License Agreement](https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE)
-
-### Essential Dependencies
-- [Sparkle](https://github.com/sparkle-project/Sparkle) - Keeping VoiceInk up to date
-- [KeyboardShortcuts](https://github.com/sindresorhus/KeyboardShortcuts) - User-customizable keyboard shortcuts
-- [LaunchAtLogin](https://github.com/sindresorhus/LaunchAtLogin) - Launch at login functionality
-- [MediaRemoteAdapter](https://github.com/ejbills/mediaremote-adapter) - Media playback control during recording
-- [Zip](https://github.com/marmelroy/Zip) - File compression and decompression utilities
-- [Swift Atomics](https://github.com/apple/swift-atomics) - Low-level atomic operations for thread-safe concurrent programming
-
-
----
-
-Made with ❤️ by Pax
+This fork is based on [Beingpax/VoiceInk](https://github.com/Beingpax/VoiceInk). The original project provides the dictation engine and application; this fork adds the audio-ducking module and its release installer. Source and bundled dependency licenses remain available in this repository under [GPL v3](LICENSE). For the original app and its release channel, visit the [upstream project](https://github.com/Beingpax/VoiceInk).
