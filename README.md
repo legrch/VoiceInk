@@ -21,9 +21,9 @@ For either first installation or replacement, quit VoiceInk and copy the whole b
 ```bash
 voiceink_installer=$(mktemp /tmp/voiceink-personal-install.XXXXXXXX)
 curl --fail --location --proto '=https' --proto-redir '=https' \
-  https://raw.githubusercontent.com/legrch/VoiceInk/fc17a20231aef730375af1bc5bc68ee922947ec3/scripts/install.sh \
+  https://raw.githubusercontent.com/legrch/VoiceInk/8420e9a75a13c85f348bf129193648be3ce043ae/scripts/install.sh \
   -o "$voiceink_installer" &&
-printf 'a6b56a0bd3951683060c5dc49bc9ca862af685752bea18a0b200a46630d4aeaf  %s\n' "$voiceink_installer" | shasum -a 256 -c - &&
+printf 'b96d14ebb4db86a4ba192345c08cb40517faaef035f03df70933fa346c8b1fdc  %s\n' "$voiceink_installer" | shasum -a 256 -c - &&
 bash "$voiceink_installer" --version latest --replace-existing
 ```
 
