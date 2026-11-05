@@ -219,18 +219,15 @@ final class AudioDuckingService {
                 return nil
             }
             guard !recoveryBlocked else { publishStatus(.incomplete); return nil }
-            if runtime.hasPendingWrite {
-                // Do not let an earlier session restore over the new recording.
-                // Its in-flight HAL write cannot be cancelled, so quarantine it.
-                if let token = runtime.lease.token {
-                    _ = latch.invalidate(ifCurrent: token)
-                    runtime.invalidate(token: token)
-                    latch.clear(token)
-                }
-                timer?.cancel()
-                timer = nil
-                publishStatus(.incomplete)
-                return nil
+            if runtime.hasPendingWrite || runtime.deferredBeginToken != nil {
+                // Preserve the real in-flight operation and its listener. It
+                // confirms on the old token, then hands ownership to the latest
+                // recording. Capture and its 220 ms trigger remain independent.
+                guard let current = runtime.lease.token,
+                      latch.permits(current) || latch.isMutePaused(current) else { return nil }
+                let token = runtime.begin(sessionID: sessionID, desired: desired)
+                publishStatus(runtime.status)
+                return token
             }
             timer?.cancel()
             timer = nil
@@ -299,6 +296,10 @@ final class AudioDuckingService {
     func activate(token: AudioDuckingLease.Token) {
         queue.async { [weak self] in
             guard let self else { return }
+            if self.runtime.deferredBeginToken == token {
+                self.runtime.activate(token: token, now: ProcessInfo.processInfo.systemUptime)
+                return
+            }
             if self.latch.isMutePaused(token) { self.deferredActivation = token; return }
             guard self.latch.permits(token) else { return }
             guard !self.recoveryBlocked else {
@@ -316,6 +317,10 @@ final class AudioDuckingService {
     func end(token: AudioDuckingLease.Token) {
         queue.async { [weak self] in
             guard let self else { return }
+            if self.runtime.deferredBeginToken == token {
+                self.runtime.end(token: token, now: ProcessInfo.processInfo.systemUptime)
+                return
+            }
             if self.latch.isMutePaused(token) { self.deferredStop = token; return }
             guard self.latch.permits(token) else { return }
             self.runtime.end(token: token, now: ProcessInfo.processInfo.systemUptime)
@@ -326,7 +331,12 @@ final class AudioDuckingService {
 
     func updateRetainedPercent(_ percent: Double) {
         queue.async { [weak self] in
-            guard let self, let token = self.runtime.lease.token else { return }
+            guard let self else { return }
+            if let next = self.runtime.deferredBeginToken {
+                self.runtime.updateRetainedPercent(percent, token: next, now: ProcessInfo.processInfo.systemUptime)
+                return
+            }
+            guard let token = self.runtime.lease.token else { return }
             if self.latch.isMutePaused(token) { self.deferredRetainedLevel = (token, percent); return }
             guard self.latch.permits(token) else { return }
             self.runtime.updateRetainedPercent(percent, token: token, now: ProcessInfo.processInfo.systemUptime)
@@ -383,6 +393,7 @@ final class AudioDuckingService {
                 self.deferredVolumeObservation = nil
                 self.runtime.volumeChanged(token: token, now: ProcessInfo.processInfo.systemUptime, observed: observed)
             }
+            if self.completeDeferredBeginIfReady() { return }
             self.publishStatus(self.runtime.status)
             if needsSchedule { self.schedule(token: token) }
         }
@@ -483,6 +494,7 @@ final class AudioDuckingService {
                 }
                 guard self.latch.permits(token) else { return }
                 self.runtime.volumeChanged(token: token, now: ProcessInfo.processInfo.systemUptime, observed: observed)
+                if self.completeDeferredBeginIfReady() { return }
                 self.publishStatus(self.runtime.status)
             }
         }
@@ -499,6 +511,39 @@ final class AudioDuckingService {
         return true
     }
 
+    /// The original timer remains responsible for the pending-write timeout.
+    /// Only a genuine acknowledgement reaches this handoff; readback alone does
+    /// not retire an uncertain write or bypass lifecycle quarantine.
+    private func completeDeferredBeginIfReady() -> Bool {
+        guard runtime.deferredBeginReady, let previous = runtime.lease.token,
+              latch.permits(previous) else { return false }
+        let next = runtime.completeDeferredBegin(now: ProcessInfo.processInfo.systemUptime) { old, new, snapshot in
+            guard self.latch.handoff(from: old, to: new) else { return false }
+            guard self.installDeviceListeners(snapshot: snapshot, token: new) else {
+                _ = self.latch.invalidate(ifCurrent: new)
+                self.latch.clear(new)
+                return false
+            }
+            return true
+        }
+        if let next {
+            logger.notice("Pending volume write confirmed; ownership handed to the latest recording")
+            schedule(token: next)
+        } else if runtime.deferredBeginToken != nil {
+            // A mute observation may pause the latch between the readiness
+            // check and runtime admission. Keep the old timer/listener alive;
+            // only that observation's validated resume may retry the handoff.
+            return false
+        } else {
+            timer?.cancel()
+            timer = nil
+            _ = latch.invalidate(ifCurrent: previous)
+            latch.clear(previous)
+        }
+        publishStatus(runtime.status)
+        return true
+    }
+
     private func schedule(token: AudioDuckingLease.Token) {
         timer?.cancel()
         timer = nil
@@ -512,6 +557,7 @@ final class AudioDuckingService {
             guard let self, self.latch.permits(token) else { return }
             let now = ProcessInfo.processInfo.systemUptime
             self.runtime.tick(token: token, now: now)
+            if self.completeDeferredBeginIfReady() { return }
             self.publishStatus(self.runtime.status)
             if self.runtime.status == .active, !self.runtime.hasPendingWrite,
                self.runtime.transitionSettled {

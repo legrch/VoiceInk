@@ -101,6 +101,16 @@ final class AudioDuckingRuntime {
         let deadline: TimeInterval
     }
     private var pendingWrite: PendingWrite?
+    private struct DeferredBegin {
+        let token: AudioDuckingLease.Token
+        let desired: AudioDuckingConfiguration
+        var activationRequested = false
+        var endedAt: TimeInterval?
+        var retainedPercent: Double?
+    }
+    private var deferredBegin: DeferredBegin?
+    var deferredBeginToken: AudioDuckingLease.Token? { deferredBegin?.token }
+    var deferredBeginReady: Bool { deferredBegin != nil && pendingWrite == nil && !unresolvedWrite }
     private struct AsyncFrame {
         let token: AudioDuckingLease.Token
         let transition: AudioDuckingTransition
@@ -134,7 +144,7 @@ final class AudioDuckingRuntime {
 
     var hasPendingWrite: Bool { pendingWrite != nil }
     var hasOwnershipCycle: Bool {
-        unresolvedWrite || pendingWrite != nil || (ownership?.states.contains { state in
+        deferredBegin != nil || unresolvedWrite || pendingWrite != nil || (ownership?.states.contains { state in
             switch state { case .owned, .uncertain: return true; case .untouched, .relinquished: return false }
         } ?? false)
     }
@@ -164,15 +174,30 @@ final class AudioDuckingRuntime {
 
     @discardableResult
     func begin(sessionID: UUID, desired: AudioDuckingConfiguration) -> AudioDuckingLease.Token? {
-        // A later HAL completion can still change the device after a stop.
-        // Never recapture that uncertain output as the next session's baseline.
-        guard !unresolvedWrite, pendingWrite == nil else { status = .incomplete; return nil }
+        guard !unresolvedWrite else { status = .incomplete; return nil }
+        if pendingWrite != nil || deferredBegin != nil {
+            // Keep the issued setter's token, listener and deadline alive. The
+            // newest recording waits for its confirmation, never for the fade.
+            guard desired.isValid, let previous = lease.token, lease.baseline != nil,
+                  let initial = beginSnapshot, let current = output.readDefault(),
+                  !current.requiresInvalidation(comparedWith: initial) else { return nil }
+            let next = AudioDuckingLease.Token(sessionID: sessionID,
+                generation: previous.generation &+ 1, cycleID: previous.cycleID)
+            deferredBegin = DeferredBegin(token: next, desired: desired)
+            pendingRetainedPercent = nil
+            return next
+        }
+        return beginImmediately(sessionID: sessionID, desired: desired)
+    }
+
+    private func beginImmediately(sessionID: UUID, desired: AudioDuckingConfiguration,
+                                  inheriting: Bool = false) -> AudioDuckingLease.Token? {
         failureReason = "none"
         failureLevels = nil
         asyncFrame = nil
         transitionSettled = false
         guard desired.isValid else { status = .unavailable; return nil }
-        let inherited = hasOwnershipCycle
+        let inherited = inheriting || hasOwnershipCycle
         if !inherited, ownership != nil, let old = lease.token { clear(token: old) }
         let token = lease.begin(sessionID)
         guard let snapshot = output.readDefault(), snapshot.values.count == snapshot.elements.count,
@@ -198,9 +223,38 @@ final class AudioDuckingRuntime {
         return token
     }
 
+    /// Transfer only after the original notification path has confirmed the
+    /// issued write. Admission atomically checks the old event lease before the
+    /// new token may write; a route/sleep invalidation cannot be reopened here.
+    @discardableResult
+    func completeDeferredBegin(now: TimeInterval,
+        admit: (AudioDuckingLease.Token, AudioDuckingLease.Token, AudioDuckingOutputSnapshot) -> Bool
+    ) -> AudioDuckingLease.Token? {
+        guard deferredBeginReady, let request = deferredBegin,
+              let previous = lease.token, normalWriteAllowed(previous) else { return nil }
+        deferredBegin = nil
+        guard let next = beginImmediately(sessionID: request.token.sessionID,
+                                          desired: request.desired, inheriting: true) else { return nil }
+        guard next == request.token, let snapshot = beginSnapshot, admit(previous, next, snapshot) else {
+            invalidate(token: next)
+            return nil
+        }
+        if let stoppedAt = request.endedAt {
+            end(token: next, now: stoppedAt)
+        } else {
+            if let percent = request.retainedPercent { effectiveConfiguration?.retainedPercent = percent }
+            if request.activationRequested { activate(token: next, now: now) }
+        }
+        return next
+    }
+
     /// The caller invokes this only after the existing chime-protection delay.
     func activate(token: AudioDuckingLease.Token, now: TimeInterval) {
-        guard token == lease.token, !lease.suppressed, !lease.ended,
+        if deferredBegin?.token == token {
+            if deferredBegin?.endedAt == nil { deferredBegin?.activationRequested = true }
+            return
+        }
+        guard deferredBegin == nil, token == lease.token, !lease.suppressed, !lease.ended,
               let config = effectiveConfiguration, config.mode == .duck,
               let initial = beginSnapshot else { return }
         guard let current = output.readDefault(), current.hasSameControls(as: initial),
@@ -220,7 +274,11 @@ final class AudioDuckingRuntime {
     }
 
     func end(token: AudioDuckingLease.Token, now: TimeInterval) {
-        guard token == lease.token, let config = effectiveConfiguration else { return }
+        if deferredBegin?.token == token {
+            if now.isFinite, deferredBegin?.endedAt == nil { deferredBegin?.endedAt = now }
+            return
+        }
+        guard deferredBegin == nil, token == lease.token, let config = effectiveConfiguration else { return }
         pendingRetainedPercent = nil
         // A system-volume/mute callback may still be queued when Stop arrives.
         // Reconcile its observed metadata before entering restoration state.
@@ -241,7 +299,13 @@ final class AudioDuckingRuntime {
     /// Only the retained percentage is live; the original baseline remains
     /// owned until restoration and timing remains fixed for this cycle.
     func updateRetainedPercent(_ percent: Double, token: AudioDuckingLease.Token, now: TimeInterval) {
-        guard token == lease.token, !lease.suppressed, !lease.ended, !lease.restoring,
+        if deferredBegin?.token == token {
+            if deferredBegin?.endedAt == nil, percent.isFinite, (0...100).contains(percent) {
+                deferredBegin?.retainedPercent = percent
+            }
+            return
+        }
+        guard deferredBegin == nil, token == lease.token, !lease.suppressed, !lease.ended, !lease.restoring,
               now.isFinite, percent.isFinite, (0...100).contains(percent),
               var config = effectiveConfiguration, config.mode == .duck else { return }
         if pendingWrite != nil || asyncFrame.map({ !AudioDuckingOutputSnapshot.levelsMatch(lease.lastConfirmed ?? [], $0.values) }) == true {
@@ -277,6 +341,8 @@ final class AudioDuckingRuntime {
             }
             return
         }
+        // No new writes or finalization belong to the superseded recording.
+        guard deferredBegin == nil else { return }
         guard let current = output.readDefault(), current.hasSameControls(as: initial),
               current.muted == initial.muted else {
             failureReason = "snapshot_changed"
@@ -504,6 +570,9 @@ final class AudioDuckingRuntime {
         ledger.recordWrite(index: pending.index, before: pending.before.values[pending.index], reportedSuccess: true, readback: current.values[pending.index])
         ownership = ledger
         lease.confirm(current.values, token: token)
+        // Preserve the original baseline even when this was its final restore
+        // write. The service now binds the newest recording before any tick.
+        guard deferredBegin == nil else { return }
         if let percent = pendingRetainedPercent,
            asyncFrame.map({ AudioDuckingOutputSnapshot.levelsMatch(current.values, $0.values) }) ?? true {
             pendingRetainedPercent = nil
@@ -539,6 +608,7 @@ final class AudioDuckingRuntime {
 
     private func relinquish(token: AudioDuckingLease.Token, incomplete: Bool) {
         guard token == lease.token else { return }
+        deferredBegin = nil
         asyncFrame = nil
         pendingRetainedPercent = nil
         if pendingWrite != nil {

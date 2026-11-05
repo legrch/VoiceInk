@@ -1274,3 +1274,176 @@ do {
           "new-effect quarantine does not revoke a previously owned unmute")
 }
 print("Delayed legacy mute UID, held recovery, unsettled effect and final admission checks passed")
+
+// Rapid recording begins must drain an issued write, not turn it into a
+// permanently orphaned intent. Exercise the production handoff and event latch.
+for values: [Float] in [[0.6], [0.6, 0.3]] {
+    for beginDuringRestore in [false, true] {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("voiceink-rapid-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journal = try AudioDuckingRecoveryJournal(directory: directory)
+        let output = makeOutput(values)
+        output.requiresWriteNotification = true
+        output.deferWrites = true
+        let latch = AudioDuckingEventLatch()
+        let runtime = AudioDuckingRuntime(output: output, journal: journal, normalWriteAllowed: { latch.permits($0) })
+        var cfg = runtimeConfig
+        cfg.restoreDelaySeconds = 0.5
+        let a = runtime.begin(sessionID: UUID(), desired: cfg)!
+        check(latch.admit(a, observedEpoch: latch.currentEpoch()), "rapid fixture admitted")
+        runtime.activate(token: a, now: 0)
+        var clock = 0.0
+        if beginDuringRestore {
+            driveAsyncTransition(runtime, output, token: a, untilIdle: false, clock: &clock)
+            runtime.end(token: a, now: 1)
+            runtime.tick(token: a, now: 2)
+            clock = 2
+        }
+        check(runtime.hasPendingWrite, "begin overlaps a real issued write")
+        let issued = output.writes.count
+        let b = runtime.begin(sessionID: UUID(), desired: cfg)!
+        check(b != a && runtime.lease.token == a && runtime.lease.baseline == values,
+              "new recording reserves its token without destroying pending confirmation or baseline")
+        runtime.activate(token: b, now: clock + 0.22)
+        runtime.tick(token: a, now: clock + 0.23)
+        check(output.writes.count == issued && !runtime.isQuarantined, "old fade cannot advance while handing off")
+        output.deliverPendingWrite()
+        runtime.volumeChanged(token: a, now: clock + 0.25)
+        check(runtime.deferredBeginReady && output.writes.count == issued,
+              "acknowledgement stops before any further old-session write")
+        let admitted = runtime.completeDeferredBegin(now: clock + 0.26) { old, new, _ in
+            latch.handoff(from: old, to: new)
+        }
+        check(admitted == b && runtime.lease.baseline == values && b.cycleID == a.cycleID,
+              "even the last restore confirmation retains the original ownership cycle")
+        let beforeStale = output.writes.count
+        runtime.end(token: a, now: clock + 0.27)
+        runtime.volumeChanged(token: a, now: clock + 0.28)
+        check(output.writes.count == beforeStale && !runtime.lease.ended, "stale old completion cannot stop the new recording")
+        clock += 0.3
+        driveAsyncTransition(runtime, output, token: b, untilIdle: false, clock: &clock)
+        runtime.end(token: b, now: clock)
+        driveAsyncTransition(runtime, output, token: b, untilIdle: true, clock: &clock)
+        check(output.devices[1]!.values == values && !runtime.isQuarantined,
+              "rapid mono/stereo recording returns to the exact original volume")
+        if case .absent = try journal.read() {} else {
+            check(false, "successful rapid cycle clears its recovery obligation")
+        }
+    }
+}
+
+for completion in ["short", "latest", "timeout", "route", "mutePause", "level"] {
+    let output = makeOutput([0.6])
+    output.requiresWriteNotification = true
+    output.deferWrites = true
+    let latch = AudioDuckingEventLatch()
+    let runtime = AudioDuckingRuntime(output: output, normalWriteAllowed: { latch.permits($0) })
+    let a = runtime.begin(sessionID: UUID(), desired: runtimeConfig)!
+    check(latch.admit(a, observedEpoch: latch.currentEpoch()), "handoff edge fixture admitted")
+    runtime.activate(token: a, now: 0)
+    let b = runtime.begin(sessionID: UUID(), desired: runtimeConfig)!
+    var latest = b
+    if completion == "latest" {
+        latest = runtime.begin(sessionID: UUID(), desired: runtimeConfig)!
+        runtime.end(token: b, now: 0.2)
+        runtime.activate(token: b, now: 0.22)
+    }
+    if completion == "short" {
+        runtime.end(token: b, now: 0.1)
+        runtime.end(token: b, now: 0.2)
+        runtime.activate(token: b, now: 0.22)
+    } else if completion != "level" { runtime.activate(token: latest, now: 0.22) }
+    if completion == "timeout" {
+        runtime.tick(token: a, now: 2.1)
+        output.deliverPendingWrite()
+        runtime.volumeChanged(token: a, now: 2.2)
+        check(runtime.isQuarantined && runtime.deferredBeginToken == nil && output.writes.count == 1,
+              "handoff retains the original bounded timeout and cannot revive a late unknown effect")
+        continue
+    }
+    if completion == "route" {
+        _ = latch.invalidate()
+        runtime.invalidate(token: a)
+        output.deliverPendingWrite()
+        runtime.volumeChanged(token: a, now: 0.3)
+        check(runtime.isQuarantined && runtime.deferredBeginToken == nil && output.writes.count == 1,
+              "route/sleep invalidation discards deferred recording and quarantines the real pending effect")
+        check(!latch.handoff(from: a, to: b), "handoff cannot reopen an invalidated event lease")
+        continue
+    }
+    var pauseEpoch: UInt64?
+    if completion == "mutePause" {
+        pauseEpoch = latch.pause(ifCurrent: a)
+        check(!latch.handoff(from: a, to: b), "temporary mute pause also denies handoff")
+        check(runtime.observeMuteChange(token: a), "unchanged mute observation retains the pending confirmation")
+        check(latch.resume(a, after: pauseEpoch!), "only the observed mute pause resumes")
+    }
+    if completion == "level" { runtime.updateRetainedPercent(55, token: b, now: 0.1) }
+    output.deliverPendingWrite()
+    runtime.volumeChanged(token: a, now: 0.3)
+    check(runtime.completeDeferredBegin(now: 0.31, admit: { old, new, _ in latch.handoff(from: old, to: new) }) == latest,
+          "latest deferred recording binds only after confirmation")
+    if completion == "short" {
+        check(runtime.lease.ended && runtime.lease.restoreDeadline == 2.1,
+              "short deferred recording restores without late activation and keeps the first Stop deadline")
+    } else if completion == "level" {
+        check(output.writes.count == 1 && runtime.effectiveConfiguration?.retainedPercent == 55,
+              "deferred live percentage does not bypass the activation grace period")
+        runtime.activate(token: b, now: 0.4)
+    } else { check(!runtime.lease.ended, "stale deferred Stop cannot stop the latest recording") }
+    var clock = 0.5
+    if !runtime.lease.ended { runtime.end(token: latest, now: clock) }
+    driveAsyncTransition(runtime, output, token: latest, untilIdle: true, clock: &clock)
+    check(output.devices[1]!.values == [0.6] && !runtime.isQuarantined, "deferred lifecycle edge restores original baseline")
+}
+print("AudioDucking pending-write recording handoff checks passed")
+
+// Stress many overlapping generations with nonzero fades. Superseded tokens
+// remain fenced, while every eventual Stop still targets the first baseline.
+for stereo in [false, true] {
+    let baseline: [Float] = stereo ? [0.6, 0.3] : [0.6]
+    let output = makeOutput(baseline)
+    output.requiresWriteNotification = true
+    output.deferWrites = true
+    let latch = AudioDuckingEventLatch()
+    let runtime = AudioDuckingRuntime(output: output, normalWriteAllowed: { latch.permits($0) })
+    var cfg = runtimeConfig
+    cfg.fadeDownSeconds = 0.5
+    cfg.fadeUpSeconds = 0.5
+    cfg.restoreDelaySeconds = 0
+    var token = runtime.begin(sessionID: UUID(), desired: cfg)!
+    check(latch.admit(token, observedEpoch: latch.currentEpoch()), "stress initial lease admitted")
+    var clock = 0.0
+    runtime.activate(token: token, now: clock)
+    for iteration in 0..<200 {
+        clock += 0.01
+        runtime.tick(token: token, now: clock)
+        if !runtime.hasPendingWrite { continue }
+        let old = token
+        let next = runtime.begin(sessionID: UUID(), desired: cfg)!
+        runtime.activate(token: next, now: clock + 0.001)
+        if iteration % 3 == 0 { runtime.end(token: next, now: clock + 0.002) }
+        output.deliverPendingWrite()
+        runtime.volumeChanged(token: old, now: clock + 0.003)
+        if iteration % 5 == 0 {
+            let epoch = latch.pause(ifCurrent: old)!
+            check(runtime.completeDeferredBegin(now: clock + 0.004, admit: { a, b, _ in latch.handoff(from: a, to: b) }) == nil,
+                  "pause before runtime admission preserves the deferred request")
+            check(runtime.deferredBeginToken == next && !runtime.isQuarantined,
+                  "temporary pause must not cancel a healthy pending handoff")
+            check(runtime.observeMuteChange(token: old) && latch.resume(old, after: epoch), "paused handoff can resume after unchanged mute proof")
+        }
+        token = runtime.completeDeferredBegin(now: clock + 0.005, admit: { a, b, _ in latch.handoff(from: a, to: b) })!
+        check(token == next && runtime.lease.baseline == baseline && !runtime.isQuarantined,
+              "repeated handoffs preserve the first baseline without quarantine")
+        let writes = output.writes.count
+        runtime.volumeChanged(token: old, now: clock + 0.006)
+        runtime.end(token: old, now: clock + 0.007)
+        check(output.writes.count == writes, "superseded generation cannot advance writes")
+    }
+    runtime.end(token: token, now: clock)
+    driveAsyncTransition(runtime, output, token: token, untilIdle: true, clock: &clock)
+    check(output.devices[1]!.values == baseline && !runtime.isQuarantined,
+          "rapid 200-generation mono/stereo sequence restores the original baseline")
+}
+print("AudioDucking repeated generation and mute-pause handoff stress checks passed")
