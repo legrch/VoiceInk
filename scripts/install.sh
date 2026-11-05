@@ -29,7 +29,7 @@ main() {
     parent=$(cd -P "$parent" && pwd)
     destination="$parent/VoiceInk.app"
     [[ $EUID -ne 0 ]] || die 'Run as your normal user, without sudo.'
-    if [[ "$destination" == /Applications/VoiceInk.app ]]; then assert_closed; fi
+    assert_closed
     work=$(mktemp -d /private/tmp/voiceink-release-install.XXXXXXXX)
     stage=''
     locked=false
@@ -102,11 +102,12 @@ main() {
         local prefs="$HOME/Library/Preferences/$BUNDLE_ID.plist"
         [[ ! -d "$support" ]] || ditto "$support" "$backup/Application Support"
         [[ ! -f "$prefs" ]] || ditto "$prefs" "$backup/Preferences.plist"
-        assert_closed
     fi
+    assert_closed
     stage=$(mktemp -d "$parent/.voiceink-release-stage.XXXXXXXX")
     ditto "$candidate" "$stage/new.app"
     codesign --verify --deep --strict "$stage/new.app"
+    assert_closed
     replacing=true
     if [[ -e "$destination" ]]; then mv "$destination" "$stage/original.app"; fi
     mv "$stage/new.app" "$destination"
