@@ -31,6 +31,7 @@ text=text.replace('/Applications', str(root/'applications'))
 text=text.replace('backup_root="$HOME/Library/Application Support/VoiceInk-Personal-Backups"', 'backup_root="$VOICEINK_TEST_ROOT/backups"')
 text=text.replace('support="$HOME/Library/Application Support/com.prakashjoshipax.VoiceInk"', 'support="$VOICEINK_TEST_ROOT/absent-support"')
 text=text.replace('prefs="$HOME/Library/Preferences/com.prakashjoshipax.VoiceInk.plist"', 'prefs="$VOICEINK_TEST_ROOT/absent-prefs"')
+text=text.replace('sounds="$HOME/Library/Application Support/VoiceInk/CustomSounds"', 'sounds="$VOICEINK_TEST_ROOT/absent-sounds"')
 assert '/Applications' not in text and '$HOME/Library' not in text
 (root/'install-test.sh').write_text(text)
 PY

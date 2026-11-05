@@ -9,10 +9,13 @@ candidate=$1
 installed=/Applications/VoiceInk.app
 [[ "$candidate" == /* && -d "$candidate" && -d "$installed" && "$candidate" != "$installed" ]] || exit 2
 # Refuse to replace a running app, and treat process-query errors as failures.
-status=0
-pgrep -x VoiceInk >/dev/null || status=$?
-if [[ $status == 0 ]]; then echo 'Quit VoiceInk before installation.' >&2; exit 1; fi
-if [[ $status != 1 ]]; then echo 'Could not confirm VoiceInk is closed.' >&2; exit 1; fi
+assert_closed() {
+    local status=0
+    pgrep -x VoiceInk >/dev/null || status=$?
+    if [[ $status == 0 ]]; then echo 'Quit VoiceInk before installation.' >&2; exit 1; fi
+    if [[ $status != 1 ]]; then echo 'Could not confirm VoiceInk is closed.' >&2; exit 1; fi
+}
+assert_closed
 for app in "$candidate" "$installed"; do
     codesign --verify --deep --strict "$app"
     [[ $(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$app/Contents/Info.plist") == com.prakashjoshipax.VoiceInk ]]
@@ -42,19 +45,23 @@ codesign -d --extract-certificates="$checkdir/new" "$candidate" >/dev/null 2>&1
 if [[ ! -s "$checkdir/old0" || ! -s "$checkdir/new0" ]] || ! cmp -s "$checkdir/old0" "$checkdir/new0"; then
     echo 'Signing certificates differ; refusing installation.' >&2; exit 1
 fi
+assert_closed
 backup_root="$HOME/Library/Application Support/VoiceInk-Personal-Backups"
 mkdir -p "$backup_root"
 backup=$(mktemp -d "$backup_root/install.XXXXXXXX")
 ditto "$installed" "$backup/VoiceInk.app"
 support="$HOME/Library/Application Support/com.prakashjoshipax.VoiceInk"
 prefs="$HOME/Library/Preferences/com.prakashjoshipax.VoiceInk.plist"
+sounds="$HOME/Library/Application Support/VoiceInk/CustomSounds"
 [[ ! -d "$support" ]] || ditto "$support" "$backup/Application Support"
 [[ ! -f "$prefs" ]] || ditto "$prefs" "$backup/Preferences.plist"
+[[ ! -d "$sounds" ]] || ditto "$sounds" "$backup/CustomSounds"
 codesign --verify --deep --strict "$backup/VoiceInk.app"
 staging=$(mktemp -d /Applications/.voiceink-install.XXXXXXXX)
 ditto "$candidate" "$staging/new.app"
 codesign --verify --deep --strict "$staging/new.app"
 # Keep the original available for rollback on an error or interruption.
+assert_closed
 replacing=true
 mv "$installed" "$staging/original.app"
 mv "$staging/new.app" "$installed"

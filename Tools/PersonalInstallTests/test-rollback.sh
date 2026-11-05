@@ -6,8 +6,17 @@ trap 'rm -rf "$root"' EXIT
 mkdir -p "$root/applications/VoiceInk.app" "$root/candidate/VoiceInk.app" "$root/bin"
 printf 'original\n' > "$root/applications/VoiceInk.app/marker"
 printf 'candidate\n' > "$root/candidate/VoiceInk.app/marker"
+mkdir "$root/fixture-sounds"
+printf 'custom-sound' > "$root/fixture-sounds/custom.wav"
 cat > "$root/bin/pgrep" <<'SH'
 #!/bin/bash
+if [[ ${VOICEINK_TEST_REOPEN:-0} == 1 ]]; then
+    count=0
+    [[ ! -f "$VOICEINK_TEST_ROOT/process-count" ]] || count=$(cat "$VOICEINK_TEST_ROOT/process-count")
+    count=$((count + 1))
+    printf '%s' "$count" > "$VOICEINK_TEST_ROOT/process-count"
+    [[ $count -lt 2 ]] || exit 0
+fi
 exit 1
 SH
 cat > "$root/bin/ditto" <<'SH'
@@ -38,6 +47,7 @@ text=text.replace('/usr/libexec/PlistBuddy', str(root/'bin/plistbuddy'))
 text=text.replace('backup_root="$HOME/Library/Application Support/VoiceInk-Personal-Backups"', 'backup_root="$VOICEINK_TEST_ROOT/backups"')
 text=text.replace('support="$HOME/Library/Application Support/com.prakashjoshipax.VoiceInk"', 'support="$VOICEINK_TEST_ROOT/absent-support"')
 text=text.replace('prefs="$HOME/Library/Preferences/com.prakashjoshipax.VoiceInk.plist"', 'prefs="$VOICEINK_TEST_ROOT/absent-prefs"')
+text=text.replace('sounds="$HOME/Library/Application Support/VoiceInk/CustomSounds"', 'sounds="$VOICEINK_TEST_ROOT/fixture-sounds"')
 assert '/Applications' not in text and '$HOME/Library' not in text
 (root/'install-test.sh').write_text(text)
 PY
@@ -48,3 +58,12 @@ fi
 [[ $(cat "$root/applications/VoiceInk.app/marker") == original ]] || { echo 'FAIL: original was not restored' >&2; exit 1; }
 [[ $(find "$root/backups" -name marker -type f -exec cat {} \;) == *original* ]] || { echo 'FAIL: backup missing' >&2; exit 1; }
 printf 'Isolated installation error restores the original and retains a backup.\n'
+
+[[ $(find "$root/backups" -name custom.wav -type f -exec cat {} \;) == custom-sound ]] || { echo 'FAIL: custom sounds missing' >&2; exit 1; }
+export VOICEINK_TEST_REOPEN=1
+if bash "$root/install-test.sh" "$root/candidate/VoiceInk.app" >"$root/reopen-output" 2>&1; then
+    echo 'FAIL: reopened VoiceInk was ignored' >&2; exit 1
+fi
+rg -q 'Quit VoiceInk before installation' "$root/reopen-output"
+[[ $(cat "$root/applications/VoiceInk.app/marker") == original ]]
+printf 'CustomSounds backup and reopening-before-backup refusal passed.\n'
