@@ -48,6 +48,8 @@ Canceling a batch transcription can leave recording temporarily unavailable unti
 
 ## Fork development
 
+Maintainers: read [release/version conventions and the upstream update procedure](docs/RELEASING.md) before preparing a release. Future releases will use **VoiceInk Plus**, preserve the upstream version, and add a separate revision such as `plus-v2.25-r1`; the existing `personal-2.25.1` release remains unchanged.
+
 - `main` is the stable personal fork; use feature branches and reviewed `--no-ff` merge commits (no squash or rebase merges).
 - `upstream` points to `Beingpax/VoiceInk`; `origin` points to `legrch/VoiceInk`.
 - Bring an upstream release into an update branch based on our `main` with a merge, resolve conflicts, run tests/build, then review and merge. Preserve published history; do not rebase or force-push `main`.
