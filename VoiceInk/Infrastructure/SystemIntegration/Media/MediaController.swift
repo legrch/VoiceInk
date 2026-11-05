@@ -141,7 +141,9 @@ final class MediaController: ObservableObject {
         }
         // A device already muted by the user is never added to our ownership.
         guard !currentlyMuted else { return true }
-        guard setSystemMuted(true, deviceID: deviceID) else {
+        guard duckingService?.performLegacyMute(deviceID: deviceID, operation: {
+            self.setSystemMuted(true, deviceID: deviceID)
+        }) == true else {
             return false
         }
         objectWillChange.send()

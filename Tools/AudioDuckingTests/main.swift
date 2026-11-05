@@ -1209,3 +1209,68 @@ blockedRuntime.tick(token: blockedToken, now: 10)
 check(recoveryBlockedOutput.writes.count == writesBeforeRecoveryBlock,
       "recovery blocking after admission denies future restoration writes without revoking a newer token")
 print("Queued recovery-block write fencing check passed")
+
+// The production delayed-mute admission must honor the actual target UID,
+// including durable held evidence after switching away and back.
+do {
+    let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("voiceink-legacy-mute-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let journal = try AudioDuckingRecoveryJournal(directory: directory)
+    let latch = AudioDuckingEventLatch()
+    let settled = AudioDuckingUnsettledWrites()
+    var calls = 0
+    let setter = { calls += 1; return true }
+    let one = { (deviceID: UInt32(1), uid: "one") }
+    let two = { (deviceID: UInt32(2), uid: "two") }
+    check(RecordingMuteAdmission.perform(deviceID: 1, journal: journal, unsettled: settled,
+        latch: latch, readIdentity: one, operation: setter), "stable legacy mute can acquire a new effect")
+    try journal.write(originalHandoff)
+    check(!RecordingMuteAdmission.perform(deviceID: 1, journal: journal, unsettled: settled,
+        latch: latch, readIdentity: one, operation: setter), "active recovery evidence denies a competing legacy mute")
+    check(RecordingMuteAdmission.perform(deviceID: 2, journal: journal, unsettled: settled,
+        latch: latch, readIdentity: two, operation: setter), "an unrelated output is not globally blocked by old evidence")
+    try journal.holdMissingDevice(originalHandoff)
+    check(!RecordingMuteAdmission.perform(deviceID: 1, journal: journal, unsettled: settled,
+        latch: latch, readIdentity: one, operation: setter), "returning to a held UID during the mute delay does not bypass quarantine")
+    let preservedMuteRecord = try journal.pendingRecovery(for: "one")
+    check(preservedMuteRecord?.1 == originalHandoff,
+          "denied mute preserves the held recovery record")
+    var pending = AudioDuckingUnsettledWrites()
+    pending.retain("two")
+    check(!RecordingMuteAdmission.perform(deviceID: 2, journal: journal, unsettled: pending,
+        latch: latch, readIdentity: two, operation: setter), "process-lifetime unsettled effects also block legacy mute")
+    let beforeRaces = calls
+    var reads = 0
+    check(!RecordingMuteAdmission.perform(deviceID: 2, journal: journal, unsettled: settled,
+        latch: latch, readIdentity: {
+            reads += 1
+            if reads == 1 { _ = latch.invalidate() }
+            return two()
+        }, operation: setter), "route or sleep invalidation during admission wins before the mute setter")
+    reads = 0
+    check(!RecordingMuteAdmission.perform(deviceID: 2, journal: journal, unsettled: settled,
+        latch: latch, readIdentity: {
+            reads += 1
+            return (2, reads == 1 ? "two" : "replacement")
+        }, operation: setter), "numeric ID reuse before final admission cannot target another UID")
+    reads = 0
+    check(!RecordingMuteAdmission.perform(deviceID: 2, journal: journal, unsettled: settled,
+        latch: latch, readIdentity: {
+            reads += 1
+            return reads == 1 ? two() : one()
+        }, operation: setter), "a new default output before the setter is rejected")
+    check(!RecordingMuteAdmission.perform(deviceID: 2, journal: nil, unsettled: settled,
+        latch: latch, readIdentity: two, operation: setter), "an unavailable recovery journal fails closed")
+    check(!RecordingMuteAdmission.perform(deviceID: 2, journal: journal, unsettled: settled,
+        latch: latch, readIdentity: { nil }, operation: setter), "a missing device identity fails closed")
+    try Data("invalid".utf8).write(to: directory.appendingPathComponent("recovery-v1.json"))
+    check(!RecordingMuteAdmission.perform(deviceID: 2, journal: journal, unsettled: settled,
+        latch: latch, readIdentity: two, operation: setter), "unreadable active evidence cannot authorize legacy mute")
+    check(calls == beforeRaces, "denied or invalidated admissions never invoke the HAL operation")
+    var owned = RecordingMuteOwnership()
+    let session = UUID()
+    owned.begin(session); owned.recordMuted(9)
+    check(owned.restorationDevices(for: session, cancelled: false) == [9],
+          "new-effect quarantine does not revoke a previously owned unmute")
+}
+print("Delayed legacy mute UID, held recovery, unsettled effect and final admission checks passed")

@@ -100,3 +100,23 @@ final class AudioDuckingEventLatch {
         admittedEpoch = nil
     }
 }
+
+/// Final admission for the delayed legacy mute path. The service serializes
+/// journal and unsettled-write access; the event latch fences the actual setter.
+/// An already-owned unmute uses its separate restoration obligation.
+enum RecordingMuteAdmission {
+    static func perform(deviceID: UInt32, journal: AudioDuckingRecoveryJournal?,
+                        unsettled: AudioDuckingUnsettledWrites, latch: AudioDuckingEventLatch,
+                        readIdentity: () -> (deviceID: UInt32, uid: String)?,
+                        operation: () -> Bool) -> Bool {
+        let epoch = latch.currentEpoch()
+        guard let journal, let selected = readIdentity(), selected.deviceID == deviceID,
+              !selected.uid.isEmpty, unsettled.allows(selected.uid),
+              (try? journal.admitsNewAudioEffect(forUID: selected.uid)) == true else { return false }
+        return latch.performIfCurrent(epoch) {
+            guard let current = readIdentity(), current.deviceID == deviceID,
+                  current.uid == selected.uid else { return false }
+            return operation()
+        } ?? false
+    }
+}

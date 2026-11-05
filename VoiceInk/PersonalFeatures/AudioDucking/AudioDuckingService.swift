@@ -106,16 +106,32 @@ final class AudioDuckingService {
     }
 
     var hasOwnershipCycle: Bool { queue.sync { runtime.hasOwnershipCycle || recoveryBlocked } }
-    private var selectedOutputUnsettled: Bool {
+    private var selectedOutputBlocked: Bool {
         guard let identity = AudioDuckingCoreAudio().currentOutputIdentity() else { return false }
-        return !unsettledWrites.allows(identity.uid)
+        guard unsettledWrites.allows(identity.uid), let journal else { return true }
+        return (try? journal.isAcknowledgedDeviceBlocked(identity.uid)) != false
     }
     var isQuarantined: Bool {
         queue.sync {
             retainUnsettledWrites()
-            return runtime.isQuarantined || recoveryBlocked || selectedOutputUnsettled
+            return runtime.isQuarantined || recoveryBlocked || selectedOutputBlocked
         }
     }
+    /// Recheck the actual delayed target, not the output selected at begin.
+    /// New mute effects share quarantine and event ordering with ducking writes.
+    func performLegacyMute(deviceID: AudioDeviceID, operation: () -> Bool) -> Bool {
+        queue.sync {
+            retainUnsettledWrites()
+            guard !recoveryBlocked else { return false }
+            let output = AudioDuckingCoreAudio()
+            return RecordingMuteAdmission.perform(deviceID: deviceID, journal: journal,
+                unsettled: unsettledWrites, latch: latch, readIdentity: {
+                    guard let selected = output.defaultDevice(), let uid = output.uid(of: selected) else { return nil }
+                    return (selected, uid)
+                }, operation: operation)
+        }
+    }
+
     var currentOutputIdentity: (uid: String, name: String)? { queue.sync { AudioDuckingCoreAudio().currentOutputIdentity() } }
 
     var currentVolumeReading: (percent: Double, muted: Bool?, restorePercent: Double)? {
@@ -374,7 +390,7 @@ final class AudioDuckingService {
 
     private func publishStatus(_ status: AudioDuckingRuntime.Status) {
         retainUnsettledWrites()
-        let quarantined = runtime.isQuarantined || recoveryBlocked || selectedOutputUnsettled
+        let quarantined = runtime.isQuarantined || recoveryBlocked || selectedOutputBlocked
         guard lastReportedStatus != status || lastReportedQuarantine != quarantined || lastReportedAdjustmentID != runtime.manualAdjustment?.id else { return }
         lastReportedAdjustmentID = runtime.manualAdjustment?.id
         lastReportedStatus = status

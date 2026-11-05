@@ -335,6 +335,19 @@ final class AudioDuckingRecoveryJournal {
         }
     }
 
+    /// A fresh writer must honor both active and durable per-output evidence.
+    /// This does not restrict restoration of a mute the caller already owns.
+    func admitsNewAudioEffect(forUID uid: String) throws -> Bool {
+        guard !uid.isEmpty else { throw JournalError.invalidRecord }
+        switch try read() {
+        case .invalid: throw JournalError.invalidRecord
+        case .record(let record) where record.deviceUID == uid && record.phase != .restored:
+            return false
+        case .absent, .record: break
+        }
+        return try !isAcknowledgedDeviceBlocked(uid)
+    }
+
     /// Invalid evidence fails closed, including for an unrelated device.
     func isAcknowledgedDeviceBlocked(_ uid: String) throws -> Bool {
         guard !uid.isEmpty else { throw JournalError.invalidRecord }

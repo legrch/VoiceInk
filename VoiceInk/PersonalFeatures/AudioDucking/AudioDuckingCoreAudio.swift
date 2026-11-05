@@ -48,7 +48,7 @@ struct AudioDuckingCoreAudio {
         return matches.count == 1 ? matches[0] : nil
     }
 
-    private func uid(of device: AudioDeviceID) -> String? {
+    func uid(of device: AudioDeviceID) -> String? {
         var property = address(kAudioDevicePropertyDeviceUID, scope: kAudioObjectPropertyScopeGlobal)
         var value: CFString = "" as CFString
         var size = UInt32(MemoryLayout<CFString>.size)
