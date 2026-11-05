@@ -1309,8 +1309,14 @@ for values: [Float] in [[0.6], [0.6, 0.3]] {
         check(output.writes.count == issued && !runtime.isQuarantined, "old fade cannot advance while handing off")
         output.deliverPendingWrite()
         runtime.volumeChanged(token: a, now: clock + 0.25)
-        check(runtime.deferredBeginReady && output.writes.count == issued,
-              "acknowledgement stops before any further old-session write")
+        if values.count == 2 {
+            check(runtime.hasPendingWrite && output.writes.count == issued + 1,
+                  "handoff finishes only the already sampled stereo pair")
+            output.deliverPendingWrite()
+            runtime.volumeChanged(token: a, now: clock + 0.255)
+        }
+        check(runtime.deferredBeginReady && output.writes.count == issued + values.count - 1,
+              "acknowledgement stops before another old-session frame")
         let admitted = runtime.completeDeferredBegin(now: clock + 0.26) { old, new, _ in
             latch.handoff(from: old, to: new)
         }
@@ -1425,6 +1431,11 @@ for stereo in [false, true] {
         if iteration % 3 == 0 { runtime.end(token: next, now: clock + 0.002) }
         output.deliverPendingWrite()
         runtime.volumeChanged(token: old, now: clock + 0.003)
+        if stereo {
+            check(runtime.hasPendingWrite, "stereo handoff retains the right-channel confirmation")
+            output.deliverPendingWrite()
+            runtime.volumeChanged(token: old, now: clock + 0.0035)
+        }
         if iteration % 5 == 0 {
             let epoch = latch.pause(ifCurrent: old)!
             check(runtime.completeDeferredBegin(now: clock + 0.004, admit: { a, b, _ in latch.handoff(from: a, to: b) }) == nil,
@@ -1445,5 +1456,6 @@ for stereo in [false, true] {
     driveAsyncTransition(runtime, output, token: token, untilIdle: true, clock: &clock)
     check(output.devices[1]!.values == baseline && !runtime.isQuarantined,
           "rapid 200-generation mono/stereo sequence restores the original baseline")
+    if stereo { checkStereoFrames(output) }
 }
 print("AudioDucking repeated generation and mute-pause handoff stress checks passed")

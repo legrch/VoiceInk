@@ -110,13 +110,19 @@ final class AudioDuckingRuntime {
     }
     private var deferredBegin: DeferredBegin?
     var deferredBeginToken: AudioDuckingLease.Token? { deferredBegin?.token }
-    var deferredBeginReady: Bool { deferredBegin != nil && pendingWrite == nil && !unresolvedWrite }
+    var deferredBeginReady: Bool {
+        deferredBegin != nil && pendingWrite == nil && !unresolvedWrite && !hasUnfinishedAsyncFrame
+    }
     private struct AsyncFrame {
         let token: AudioDuckingLease.Token
         let transition: AudioDuckingTransition
         let values: [Float]
     }
     private var asyncFrame: AsyncFrame?
+    private var hasUnfinishedAsyncFrame: Bool {
+        guard let frame = asyncFrame, let confirmed = lease.lastConfirmed else { return false }
+        return !AudioDuckingOutputSnapshot.levelsMatch(confirmed, frame.values)
+    }
     private(set) var transitionSettled = false
     private var pendingRetainedPercent: Double?
     private(set) var manualAdjustment: (id: UUID, uid: String, percent: Double)?
@@ -341,8 +347,9 @@ final class AudioDuckingRuntime {
             }
             return
         }
-        // No new writes or finalization belong to the superseded recording.
-        guard deferredBegin == nil else { return }
+        // Drain only the already sampled stereo pair, preserving balance.
+        // Never sample another old-session frame while a recording waits.
+        guard deferredBegin == nil || hasUnfinishedAsyncFrame else { return }
         guard let current = output.readDefault(), current.hasSameControls(as: initial),
               current.muted == initial.muted else {
             failureReason = "snapshot_changed"
@@ -472,6 +479,7 @@ final class AudioDuckingRuntime {
         }
         asyncFrame = nil
         transitionSettled = transition.isComplete(at: now)
+        guard deferredBegin == nil else { return }
         if lease.restoring && transitionSettled {
             // A quantized control is complete only if readback reached baseline;
             // otherwise leave the remaining obligation visible, never invent it.
@@ -570,9 +578,13 @@ final class AudioDuckingRuntime {
         ledger.recordWrite(index: pending.index, before: pending.before.values[pending.index], reportedSuccess: true, readback: current.values[pending.index])
         ownership = ledger
         lease.confirm(current.values, token: token)
-        // Preserve the original baseline even when this was its final restore
-        // write. The service now binds the newest recording before any tick.
-        guard deferredBegin == nil else { return }
+        // Finish only this sampled channel pair before handoff. Its targets
+        // were fixed before the new recording; do not resample or finalize the
+        // old restore, even when its final frame reached the baseline.
+        if deferredBegin != nil {
+            if hasUnfinishedAsyncFrame { tick(token: token, now: now) }
+            return
+        }
         if let percent = pendingRetainedPercent,
            asyncFrame.map({ AudioDuckingOutputSnapshot.levelsMatch(current.values, $0.values) }) ?? true {
             pendingRetainedPercent = nil
