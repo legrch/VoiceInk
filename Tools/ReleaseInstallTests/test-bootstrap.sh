@@ -9,6 +9,13 @@ trap 'rm -rf "$fixture"' EXIT
 # Historical exact-version installs retain the immutable legacy payload.
 export BOOTSTRAP_LEGACY_PAYLOAD="$fixture/legacy-install.sh"
 git -C "$root" show 7852619a59ba84f34e386019c55eaf8fa1ba5eeb:scripts/install.sh > "$BOOTSTRAP_LEGACY_PAYLOAD"
+# Test the actual immutable Plus payload named by this bootstrap, including
+# coherent intermediate commits before a newer installer pin is promoted.
+pinned_commit=$(sed -n 's@.*plus_installer_url=https://raw.githubusercontent.com/legrch/VoiceInk/\([a-f0-9]*\)/scripts/install.sh@\1@p' "$bootstrap")
+if [[ -n "$pinned_commit" ]]; then
+    payload="$fixture/pinned-install.sh"
+    git -C "$root" show "$pinned_commit:scripts/install.sh" > "$payload"
+fi
 cat > "$fixture/runner.sh" <<'RUNNER'
 #!/bin/bash
 source "$1"

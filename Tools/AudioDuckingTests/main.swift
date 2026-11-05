@@ -1459,3 +1459,83 @@ for stereo in [false, true] {
     if stereo { checkStereoFrames(output) }
 }
 print("AudioDucking repeated generation and mute-pause handoff stress checks passed")
+
+// A mute pause can occur inside the latch admission callback, after runtime's
+// initial permit check. Failed admission must not retire the original lease.
+for interruption in ["mute", "route", "listenerFailure"] {
+    let output = makeOutput([0.6])
+    output.requiresWriteNotification = true
+    output.deferWrites = true
+    let latch = AudioDuckingEventLatch()
+    let runtime = AudioDuckingRuntime(output: output, normalWriteAllowed: { latch.permits($0) })
+    let a = runtime.begin(sessionID: UUID(), desired: runtimeConfig)!
+    check(latch.admit(a, observedEpoch: latch.currentEpoch()), "mid-admission fixture admitted")
+    runtime.activate(token: a, now: 0)
+    let b = runtime.begin(sessionID: UUID(), desired: runtimeConfig)!
+    runtime.activate(token: b, now: 0.22)
+    output.deliverPendingWrite()
+    runtime.volumeChanged(token: a, now: 0.3)
+    var pause: UInt64?
+    let attempted = runtime.completeDeferredBegin(now: 0.31) { old, next, _ in
+        if interruption == "mute" { pause = latch.pause(ifCurrent: old) }
+        else if interruption == "route" { _ = latch.invalidate() }
+        else {
+            check(latch.handoff(from: old, to: next), "listener failure occurs only after real latch transfer")
+            _ = latch.invalidate(ifCurrent: next)
+            latch.clear(next)
+            return false
+        }
+        return latch.handoff(from: old, to: next)
+    }
+    check(attempted == nil && runtime.lease.token == a && runtime.deferredBeginToken == b && runtime.lease.baseline == [0.6],
+          "admission failure never mutates the original lease, request or baseline")
+    check(output.writes.count == 1, "mid-admission event cannot issue another setter")
+    if interruption == "mute" {
+        check(runtime.observeMuteChange(token: a) && latch.resume(a, after: pause!), "unchanged mute can reconcile the original lease")
+        check(runtime.completeDeferredBegin(now: 0.32, admit: { old, next, _ in latch.handoff(from: old, to: next) }) == b,
+              "the original deferred recording survives a mid-admission mute pause")
+        runtime.end(token: b, now: 0.4)
+        var clock = 0.4
+        driveAsyncTransition(runtime, output, token: b, untilIdle: true, clock: &clock)
+        check(output.devices[1]!.values == [0.6], "mid-admission mute pause still restores the original baseline")
+    } else {
+        // Production service retires the retained old lease when admission was
+        // revoked rather than temporarily paused; it never retries the setter.
+        runtime.invalidate(token: a)
+        runtime.tick(token: b, now: 10)
+        check(runtime.deferredBeginToken == nil && output.writes.count == 1,
+              "route and failed listener installation cannot revive deferred writes")
+    }
+}
+
+for path in ["queued-active", "superseded-deferred", "latest-level"] {
+    let output = makeOutput([0.6])
+    output.requiresWriteNotification = true
+    output.deferWrites = true
+    let runtime = AudioDuckingRuntime(output: output)
+    let a = runtime.begin(sessionID: UUID(), desired: runtimeConfig)!
+    runtime.activate(token: a, now: 0)
+    if path == "queued-active" { runtime.updateRetainedPercent(55, token: a, now: 0.01) }
+    var desired = runtimeConfig; desired.retainedPercent = 55
+    var next = runtime.begin(sessionID: UUID(), desired: desired)!
+    if path != "queued-active" {
+        runtime.updateRetainedPercent(55, token: next, now: 0.02)
+        if path == "latest-level" { runtime.updateRetainedPercent(60, token: next, now: 0.03) }
+        next = runtime.begin(sessionID: UUID(), desired: desired)!
+    }
+    runtime.activate(token: next, now: 0.22)
+    output.deliverPendingWrite()
+    runtime.volumeChanged(token: a, now: 0.3)
+    check(runtime.completeDeferredBegin(now: 0.31, admit: { _, _, _ in true }) == next, "bind latest percentage fixture")
+    let expected: Double = path == "latest-level" ? 60 : 55
+    check(runtime.effectiveConfiguration?.retainedPercent == expected && runtime.lease.baseline == [0.6],
+          "latest queued active/deferred percentage survives recording replacement")
+    var clock = 0.4
+    driveAsyncTransition(runtime, output, token: next, untilIdle: false, clock: &clock)
+    check(AudioDuckingOutputSnapshot.levelsMatch(output.devices[1]!.values, [0.6 * Float(expected / 100)]),
+          "hardware target uses the retained percentage shown in settings")
+    runtime.end(token: next, now: clock)
+    driveAsyncTransition(runtime, output, token: next, untilIdle: true, clock: &clock)
+    check(output.devices[1]!.values == [0.6], "carried percentage never changes the pre-recording baseline")
+}
+print("Mid-admission lifecycle race and queued percentage carry regression checks passed")

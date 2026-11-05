@@ -516,7 +516,7 @@ final class AudioDuckingService {
     /// not retire an uncertain write or bypass lifecycle quarantine.
     private func completeDeferredBeginIfReady() -> Bool {
         guard runtime.deferredBeginReady, let previous = runtime.lease.token,
-              latch.permits(previous) else { return false }
+              let requested = runtime.deferredBeginToken, latch.permits(previous) else { return false }
         let next = runtime.completeDeferredBegin(now: ProcessInfo.processInfo.systemUptime) { old, new, snapshot in
             guard self.latch.handoff(from: old, to: new) else { return false }
             guard self.installDeviceListeners(snapshot: snapshot, token: new) else {
@@ -529,14 +529,17 @@ final class AudioDuckingService {
         if let next {
             logger.notice("Pending volume write confirmed; ownership handed to the latest recording")
             schedule(token: next)
-        } else if runtime.deferredBeginToken != nil {
-            // A mute observation may pause the latch between the readiness
-            // check and runtime admission. Keep the old timer/listener alive;
-            // only that observation's validated resume may retry the handoff.
-            return false
         } else {
+            if runtime.deferredBeginToken != nil {
+                // A pause before or inside admission retains the old lease.
+                // A real revocation or failed listener installation does not.
+                if latch.isMutePaused(previous) || latch.permits(previous) { return false }
+                runtime.invalidate(token: previous)
+            }
             timer?.cancel()
             timer = nil
+            _ = latch.invalidate(ifCurrent: requested)
+            latch.clear(requested)
             _ = latch.invalidate(ifCurrent: previous)
             latch.clear(previous)
         }

@@ -189,7 +189,8 @@ final class AudioDuckingRuntime {
                   !current.requiresInvalidation(comparedWith: initial) else { return nil }
             let next = AudioDuckingLease.Token(sessionID: sessionID,
                 generation: previous.generation &+ 1, cycleID: previous.cycleID)
-            deferredBegin = DeferredBegin(token: next, desired: desired)
+            let latestLevel = deferredBegin?.retainedPercent ?? pendingRetainedPercent
+            deferredBegin = DeferredBegin(token: next, desired: desired, retainedPercent: latestLevel)
             pendingRetainedPercent = nil
             return next
         }
@@ -238,10 +239,21 @@ final class AudioDuckingRuntime {
     ) -> AudioDuckingLease.Token? {
         guard deferredBeginReady, let request = deferredBegin,
               let previous = lease.token, normalWriteAllowed(previous) else { return nil }
+        guard let snapshot = beginSnapshot, let current = output.readDefault(),
+              !current.requiresInvalidation(comparedWith: snapshot),
+              lease.lastConfirmed.map({ AudioDuckingOutputSnapshot.levelsMatch(current.values, $0) }) == true else {
+            failureReason = "handoff_snapshot_changed"
+            relinquish(token: previous, incomplete: true)
+            return nil
+        }
+        // Admission can race a mute pause on the notification queue. Keep the
+        // original lease and request intact until the event latch transfers;
+        // failed admission may be a temporary pause, not lost ownership.
+        guard admit(previous, request.token, snapshot) else { return nil }
         deferredBegin = nil
         guard let next = beginImmediately(sessionID: request.token.sessionID,
                                           desired: request.desired, inheriting: true) else { return nil }
-        guard next == request.token, let snapshot = beginSnapshot, admit(previous, next, snapshot) else {
+        guard next == request.token else {
             invalidate(token: next)
             return nil
         }
