@@ -68,6 +68,10 @@ final class MediaController: ObservableObject {
     }
 
     func refreshOutputVolume() {
+        // Read readiness even when no status event fires: returned devices may
+        // become readable later, and the query can retire stale held evidence.
+        duckingQuarantined = duckingService?.isQuarantined == true
+        canAcknowledgeDuckingRecovery = duckingService?.canAcknowledgeRecovery == true
         let reading = duckingService?.currentVolumeReading
         currentOutputVolumePercent = reading?.percent
         outputRestoreVolumePercent = reading?.restorePercent

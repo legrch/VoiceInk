@@ -55,7 +55,7 @@ struct AudioSetupView: View {
                     .disabled(!mediaController.canAcknowledgeDuckingRecovery)
                     Text(mediaController.canAcknowledgeDuckingRecovery
                         ? "Set a comfortable system volume, then reset. Your current volume stays unchanged."
-                        : "An audio change is still unresolved. Finish recording and check system volume before resetting.")
+                        : "Finish recording first. If Reset stays unavailable, quit VoiceInk, check system volume, then reopen it.")
                         .foregroundStyle(.secondary)
                         .help("Reset archives recovery evidence without changing volume. It does not cancel a previously pending system change.")
                 }
@@ -140,6 +140,9 @@ struct AudioSetupView: View {
     private var duckingEnabled: Binding<Bool> {
         Binding(get: { duckingSettings.configuration.mode == .duck }, set: { enabled in
             if enabled {
+                // Recheck before using cached UI flags: polling may have already
+                // reconciled the journal without a recording status transition.
+                mediaController.refreshOutputVolume()
                 if mediaController.duckingQuarantined || mediaController.canAcknowledgeDuckingRecovery {
                     guard mediaController.acknowledgeDuckingRecovery(reason: .userReenabledDucking) else { return }
                 }
