@@ -256,6 +256,34 @@ final class AudioDuckingRecoveryJournal {
         try clear()
     }
 
+    /// Revisit confirmed evidence when its output returns. A changed user level
+    /// or an already-restored baseline needs no setter. A matching ducked level,
+    /// unknown metadata or interrupted setter remains blocked without continuity.
+    @discardableResult
+    func reconcileHeld(uid: String, observed: AudioDuckingOutputSnapshot,
+                       commit: (() throws -> Void) throws -> Bool) throws -> Int {
+        guard uid == observed.uid, observed.muted != nil,
+              observed.values.count == observed.elements.count, !observed.values.isEmpty,
+              observed.values.allSatisfy({ $0.isFinite && (0...1).contains($0) }) else { return 0 }
+        let entries = try archivedRecords(prefix: "held-")
+        let eligible = entries.filter { _, record in
+            guard record.deviceUID == uid, record.phase == .confirmed,
+                  record.muted != nil, record.observe(observed) != .metadataChanged else { return false }
+            // HAL rounding must not turn a confirmed value into an external change.
+            if AudioDuckingOutputSnapshot.levelsMatch(observed.values, record.baseline) { return true }
+            return !AudioDuckingOutputSnapshot.levelsMatch(observed.values, record.confirmed)
+        }
+        guard !eligible.isEmpty else { return 0 }
+        for (_, record) in eligible { try preserve(record, prefix: "relinquished-") }
+        let committed = try commit {
+            for (source, _) in eligible {
+                guard unlink(source.path) == 0 else { throw JournalError.io }
+            }
+            try syncDirectory()
+        }
+        return committed ? eligible.count : 0
+    }
+
     var hasHeldEvidence: Bool { (try? !archivedRecords(prefix: "held-").isEmpty) == true }
 
     struct Acknowledgment: Codable, Equatable {
