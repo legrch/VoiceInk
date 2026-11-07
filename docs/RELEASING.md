@@ -15,7 +15,8 @@ Keep the full upstream version and our release revision separate. Do not reserve
 | Upstream version | Fork revision | Release title | Git tag | Example build |
 |---|---|---|---|---|
 | 2.25 | 1 | VoiceInk Plus 2.25 · r1 | `plus-v2.25-r1` | 1001 |
-| 2.25 | 2 | VoiceInk Plus 2.25 · r2 | `plus-v2.25-r3` | 1002 |
+| 2.25 | 2 | VoiceInk Plus 2.25 · r2 | `plus-v2.25-r2` | 1002 |
+| 2.25 | 3 | VoiceInk Plus 2.25 · r3 | `plus-v2.25-r3` | 1003 |
 | 2.25.1 | 1 | VoiceInk Plus 2.25.1 · r1 | `plus-v2.25.1-r1` | 1003 |
 | 2.26 | 1 | VoiceInk Plus 2.26 · r1 | `plus-v2.26-r1` | 1004 |
 
