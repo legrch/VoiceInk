@@ -1,14 +1,29 @@
 import Foundation
 import Darwin
 
-/// Process-lifetime evidence of unsettled setters survives runtime replacement.
-/// User acknowledgment, elapsed time and matching readback cannot clear it.
+/// Unsettled setters fence the current cycle. Only the owner-selected idle
+/// recovery policy may release a UID after durable archival; matching values or
+/// elapsed time alone are not confirmation or cancellation.
 struct AudioDuckingUnsettledWrites {
     private var deviceUIDs: Set<String> = []
     mutating func retain(_ uid: String?) {
         if let uid { deviceUIDs.insert(uid) }
     }
     func allows(_ uid: String) -> Bool { !deviceUIDs.contains(uid) }
+    mutating func releaseAfterIdleArchive(_ uid: String) { deviceUIDs.remove(uid) }
+}
+
+/// Capture lifetime is distinct from fade/recovery lifetime. A stale Stop must
+/// never authorize recovery while a replacement recording is being captured.
+struct AudioDuckingCaptureActivity {
+    private(set) var sessionID: UUID?
+    var isIdle: Bool { sessionID == nil }
+    mutating func begin(_ sessionID: UUID) { self.sessionID = sessionID }
+    @discardableResult mutating func end(_ sessionID: UUID) -> Bool {
+        guard self.sessionID == sessionID else { return false }
+        self.sessionID = nil
+        return true
+    }
 }
 
 /// Persisted device identity never relies on an AudioDeviceID surviving restart.
@@ -270,6 +285,7 @@ final class AudioDuckingRecoveryJournal {
     enum AcknowledgmentReason: String {
         case userSetVolume = "user_set_volume"
         case userReenabledDucking = "user_reenabled_ducking"
+        case automaticIdleRecovery = "automatic_idle_recovery"
     }
 
     /// An unresolved record for the selected UID can be explicitly acknowledged.
@@ -353,6 +369,53 @@ final class AudioDuckingRecoveryJournal {
         guard !uid.isEmpty else { throw JournalError.invalidRecord }
         let records = try archivedRecords(prefix: "held-") + archivedRecords(prefix: "acknowledged-")
         return records.contains { $0.1.deviceUID == uid }
+    }
+
+    struct FailureEvidence: Codable, Equatable {
+        struct Levels: Codable, Equatable {
+            let before: Float
+            let target: Float
+            let observed: Float
+        }
+        let record: AudioDuckingRecoveryRecord
+        let reason: String
+        let levels: Levels?
+        let observedAt: Date
+    }
+
+    /// Diagnostic sidecars never confirm, retire or replace recovery evidence.
+    /// Keep the first failure for each cycle, captured before later user edits.
+    func recordFailure(reason: String, levels: FailureEvidence.Levels?, now: Date) throws {
+        guard !reason.isEmpty, reason != "none", reason.utf8.count <= 1024,
+              now.timeIntervalSince1970.isFinite,
+              case .record(let record) = try read() else { return }
+        if let levels {
+            guard [levels.before, levels.target, levels.observed].allSatisfy({ $0.isFinite && (0...1).contains($0) }) else { return }
+        }
+        let evidence = FailureEvidence(record: record, reason: reason, levels: levels, observedAt: now)
+        let bytes = try JSONEncoder().encode(evidence)
+        guard bytes.count <= 65_536 else { throw JournalError.invalidRecord }
+        let target = directory.appendingPathComponent("failure-\(record.cycleID.uuidString).json")
+        let fd = open(target.path, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW, mode_t(0o600))
+        guard fd >= 0 else {
+            if errno == EEXIST { return }
+            throw JournalError.io
+        }
+        var complete = false
+        defer { close(fd); if !complete { unlink(target.path) } }
+        let wrote = bytes.withUnsafeBytes { buffer -> Bool in
+            guard let base = buffer.baseAddress else { return false }
+            var offset = 0
+            while offset < buffer.count {
+                let count = Darwin.write(fd, base.advanced(by: offset), buffer.count - offset)
+                guard count > 0 else { return false }
+                offset += count
+            }
+            return true
+        }
+        guard wrote, fsync(fd) == 0 else { throw JournalError.io }
+        complete = true
+        try syncDirectory()
     }
 
     func clear() throws {

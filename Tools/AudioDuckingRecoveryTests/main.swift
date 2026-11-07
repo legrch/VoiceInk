@@ -199,3 +199,27 @@ let heldReset = try confirmedResetJournal.acknowledge(uid: "device-uid", observe
 let heldStillBlocked = try confirmedResetJournal.isAcknowledgedDeviceBlocked("device-uid")
 check(heldReset && !heldStillBlocked, "a connected output's held confirmed record can also be explicitly reset")
 print("Confirmed crash recovery reset checks passed; no HAL writes")
+
+let failureDirectory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("voiceink-failure-evidence-\(UUID().uuidString)")
+defer { try? FileManager.default.removeItem(at: failureDirectory) }
+let failureJournal = try AudioDuckingRecoveryJournal(directory: failureDirectory)
+let failedIntent = record(phase: .writeIntent, intended: [0.04125])
+try failureJournal.write(failedIntent)
+let failedLevels = AudioDuckingRecoveryJournal.FailureEvidence.Levels(before: 0.125, target: 0.04125, observed: 0.00170156)
+try failureJournal.recordFailure(reason: "notification_unexpected_value", levels: failedLevels, now: Date(timeIntervalSince1970: 100))
+if case .record(let stillPending) = try failureJournal.read() {
+    check(stillPending == failedIntent, "diagnostics never confirm or replace the original write intent")
+} else { check(false, "diagnostics preserve blocking evidence") }
+let failureURL = failureDirectory.appendingPathComponent("failure-\(failedIntent.cycleID.uuidString).json")
+let failureBytes = try Data(contentsOf: failureURL)
+let failureEvidence = try JSONDecoder().decode(AudioDuckingRecoveryJournal.FailureEvidence.self, from: failureBytes)
+check(failureEvidence.record == failedIntent && failureEvidence.levels == failedLevels,
+      "failure captures before/target/observed at the event rather than a later manual volume")
+try failureJournal.recordFailure(reason: "later_event", levels: nil, now: Date(timeIntervalSince1970: 200))
+let failureBytesAfter = try Data(contentsOf: failureURL)
+check(failureBytesAfter == failureBytes, "first-failure evidence is immutable for the cycle")
+let failureBlocked = try failureJournal.isAcknowledgedDeviceBlocked("device-uid")
+check(!failureBlocked, "diagnostic sidecars are not mistaken for held evidence")
+let activeStillBlocked = try failureJournal.admitsNewAudioEffect(forUID: "device-uid")
+check(!activeStillBlocked, "a failure sidecar never admits competing effects")
+print("Failure sidecar durability, first-event capture and unchanged recovery admission checks passed")

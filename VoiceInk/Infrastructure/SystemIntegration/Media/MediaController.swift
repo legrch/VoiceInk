@@ -62,7 +62,7 @@ final class MediaController: ObservableObject {
                     desired.setRetainedPercent(adjustment.percent.rounded(), for: adjustment.uid)
                     self.duckingSettings.set(desired)
                 }
-                if status == .incomplete { self?.incompleteDuckingRestoration = true }
+                self?.incompleteDuckingRestoration = status == .incomplete
             }
         }
     }
@@ -89,6 +89,7 @@ final class MediaController: ObservableObject {
         // Invalidate delayed restoration before the recorder's 220 ms mute delay.
         recordingSessionID = sessionID
         muteOwnership.begin(sessionID)
+        duckingService?.prepareRecordingCapture(sessionID: sessionID)
         duckingService?.captureRecordingVolume()
         let desired = duckingSettings.configuration
         if duckingService?.isQuarantined == true {
@@ -119,6 +120,16 @@ final class MediaController: ObservableObject {
             duckingService?.abandonUnownedSession()
             duckingToken = nil
         }
+    }
+
+    func recordingCaptureEnded(sessionID: UUID) {
+        guard sessionID == recordingSessionID else { return }
+        duckingService?.recordingCaptureEnded(sessionID: sessionID)
+    }
+
+    func resetDuckingWhenIdle() {
+        _ = duckingService?.resetIdleOutput()
+        refreshOutputVolume()
     }
 
     @discardableResult

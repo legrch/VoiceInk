@@ -20,6 +20,8 @@ final class AudioDuckingService {
     private var recoveryBlocked = false
     private var recoveryContinuityLost = false
     private var unsettledWrites = AudioDuckingUnsettledWrites()
+    private var captureActivity = AudioDuckingCaptureActivity()
+    private var idleRecoveryScheduled = false
 
     // Queue-confined, retained even when another output receives a fresh runtime.
     private func retainUnsettledWrites() {
@@ -121,7 +123,7 @@ final class AudioDuckingService {
     func performLegacyMute(deviceID: AudioDeviceID, operation: () -> Bool) -> Bool {
         queue.sync {
             retainUnsettledWrites()
-            guard !recoveryBlocked else { return false }
+            guard !recoveryBlocked, !captureActivity.isIdle else { return false }
             let output = AudioDuckingCoreAudio()
             return RecordingMuteAdmission.perform(deviceID: deviceID, journal: journal,
                 unsettled: unsettledWrites, latch: latch, readIdentity: {
@@ -146,7 +148,7 @@ final class AudioDuckingService {
     var canAcknowledgeRecovery: Bool {
         queue.sync {
             retainUnsettledWrites()
-            guard recoveryToken == nil, !runtime.hasPendingWrite,
+            guard captureActivity.isIdle, recoveryToken == nil, !runtime.hasPendingWrite,
                   runtime.status != .active, runtime.status != .restoring,
                   let journal, let snapshot = AudioDuckingCoreAudio().readDefault(), snapshot.muted != nil else { return false }
             return unsettledWrites.allows(snapshot.uid) && (try? journal.pendingRecovery(for: snapshot.uid)) != nil
@@ -156,16 +158,24 @@ final class AudioDuckingService {
     /// Explicit reset archives unresolved records of the connected output.
     /// It never writes volume, restores baseline or confirms a previous setter.
     func acknowledgeRecovery(reason: AudioDuckingRecoveryJournal.AcknowledgmentReason = .userSetVolume) -> Bool {
-        queue.sync {
+        queue.sync { acknowledgeRecoveryOnQueue(reason: reason) }
+    }
+
+    private func acknowledgeRecoveryOnQueue(reason: AudioDuckingRecoveryJournal.AcknowledgmentReason,
+                                            idleRecovery: Bool = false) -> Bool {
             retainUnsettledWrites()
-            guard recoveryToken == nil, !runtime.hasPendingWrite,
+            guard captureActivity.isIdle, recoveryToken == nil, !runtime.hasPendingWrite,
                   runtime.status != .active, runtime.status != .restoring, let journal else { return false }
             let epoch = latch.currentEpoch()
             let output = AudioDuckingCoreAudio()
             guard let snapshot = output.readDefault(), snapshot.muted != nil,
-                  unsettledWrites.allows(snapshot.uid) else { return false }
+                  (idleRecovery || unsettledWrites.allows(snapshot.uid)) else { return false }
             do {
                 var accepted = false
+                if idleRecovery, try journal.pendingRecovery(for: snapshot.uid) == nil,
+                   case .absent = try journal.read() {
+                    accepted = runtime.isQuarantined || recoveryBlocked || !unsettledWrites.allows(snapshot.uid)
+                }
                 for _ in 0..<64 {
                     guard try journal.pendingRecovery(for: snapshot.uid) != nil else { break }
                     guard try journal.acknowledge(uid: snapshot.uid, observed: snapshot, now: Date(), reason: reason, commit: { operation in
@@ -173,27 +183,84 @@ final class AudioDuckingService {
                               current.muted == snapshot.muted,
                               AudioDuckingOutputSnapshot.levelsMatch(current.values, snapshot.values) else { return false }
                         return try self.latch.performIfCurrent(epoch) {
-                            guard !self.runtime.hasPendingWrite, self.recoveryToken == nil else { return false }
+                            guard self.captureActivity.isIdle, !self.runtime.hasPendingWrite,
+                                  self.recoveryToken == nil else { return false }
                             try operation()
                             return true
                         } ?? false
                     }) else { return false }
                     accepted = true
                 }
-                guard accepted, try journal.pendingRecovery(for: snapshot.uid) == nil else { return false }
+                guard accepted, try journal.pendingRecovery(for: snapshot.uid) == nil,
+                      let latest = output.readDefault(), latest.hasSameControls(as: snapshot),
+                      latest.muted == snapshot.muted,
+                      AudioDuckingOutputSnapshot.levelsMatch(latest.values, snapshot.values),
+                      latch.retireIfCurrent(epoch) else { return false }
                 timer?.cancel(); timer = nil
                 recoveryTimer?.cancel(); recoveryTimer = nil
-                if let token = runtime.lease.token { _ = latch.invalidate(ifCurrent: token); latch.clear(token) }
                 removeDeviceListeners()
                 runtime = makeRuntime(output: output)
+                if idleRecovery {
+                    unsettledWrites.releaseAfterIdleArchive(snapshot.uid)
+                    // The retired coordinator must not retain a process-local
+                    // fence after its evidence was durably archived.
+                    recovery = AudioDuckingRecoveryCoordinator(journal: journal, output: output,
+                        resolve: { output.device(forUID: $0) })
+                }
+                recordingVolume = AudioDuckingRecordingVolume()
                 recoveryBlocked = false
                 recoveryContinuityLost = false
                 lastReportedStatus = nil
-                logger.notice("Owner acknowledged recovery; observed UID and volume are private: uid=\(snapshot.uid, privacy: .private) values=\(String(describing: snapshot.values), privacy: .private) mute=\(String(describing: snapshot.muted), privacy: .private)")
+                logger.notice("Recovery cycle archived without a volume write; observed UID and volume are private: uid=\(snapshot.uid, privacy: .private) values=\(String(describing: snapshot.values), privacy: .private) mute=\(String(describing: snapshot.muted), privacy: .private)")
                 startRecovery()
                 return true
-            } catch { publishStatus(.incomplete); return false }
+            } catch {
+                logger.error("Idle recovery could not archive evidence; retry on next recording")
+                return false
+            }
+    }
+
+    /// Owner-selected availability policy: abandon a failed idle cycle without
+    /// writing volume or claiming the hardware has cancelled an old request.
+    @discardableResult private func recoverIdleOutput() -> Bool {
+        guard captureActivity.isIdle, !runtime.hasPendingWrite, recoveryToken == nil,
+              runtime.status != .active, runtime.status != .restoring else { return false }
+        return acknowledgeRecoveryOnQueue(reason: .automaticIdleRecovery, idleRecovery: true)
+    }
+
+    private func scheduleIdleRecovery() {
+        guard captureActivity.isIdle, !idleRecoveryScheduled else { return }
+        idleRecoveryScheduled = true
+        queue.async { [weak self] in
+            guard let self else { return }
+            defer { self.idleRecoveryScheduled = false }
+            _ = self.recoverIdleOutput()
         }
+    }
+
+    func prepareRecordingCapture(sessionID: UUID) {
+        queue.sync {
+            if captureActivity.isIdle { _ = recoverIdleOutput() }
+            captureActivity.begin(sessionID)
+        }
+    }
+
+    func recordingCaptureEnded(sessionID: UUID) {
+        queue.async { [weak self] in
+            guard let self, self.captureActivity.end(sessionID) else { return }
+            // Capture end is authoritative and cannot be lost when Recorder's
+            // restoration waiter is cancelled. Later Stop calls are idempotent.
+            if let next = self.runtime.deferredBeginToken, next.sessionID == sessionID {
+                self.endOnQueue(token: next)
+            } else if let token = self.runtime.lease.token, token.sessionID == sessionID {
+                self.endOnQueue(token: token)
+            }
+            self.scheduleIdleRecovery()
+        }
+    }
+
+    @discardableResult func resetIdleOutput() -> Bool {
+        queue.sync { recoverIdleOutput() }
     }
 
     func abandonUnownedSession() {
@@ -323,18 +390,19 @@ final class AudioDuckingService {
     }
 
     func end(token: AudioDuckingLease.Token) {
-        queue.async { [weak self] in
-            guard let self else { return }
-            if self.runtime.deferredBeginToken == token {
-                self.runtime.end(token: token, now: ProcessInfo.processInfo.systemUptime)
-                return
-            }
-            if self.latch.isMutePaused(token) { self.deferredStop = token; return }
-            guard self.latch.permits(token) else { return }
-            self.runtime.end(token: token, now: ProcessInfo.processInfo.systemUptime)
-            self.publishStatus(self.runtime.status)
-            self.schedule(token: token)
+        queue.async { [weak self] in self?.endOnQueue(token: token) }
+    }
+
+    private func endOnQueue(token: AudioDuckingLease.Token) {
+        if runtime.deferredBeginToken == token {
+            runtime.end(token: token, now: ProcessInfo.processInfo.systemUptime)
+            return
         }
+        if latch.isMutePaused(token) { deferredStop = token; return }
+        guard latch.permits(token) else { return }
+        runtime.end(token: token, now: ProcessInfo.processInfo.systemUptime)
+        publishStatus(runtime.status)
+        schedule(token: token)
     }
 
     func updateRetainedPercent(_ percent: Double) {
@@ -415,12 +483,18 @@ final class AudioDuckingService {
         lastReportedStatus = status
         lastReportedQuarantine = quarantined
         if status == .incomplete || status == .unavailable {
+            let evidenceLevels = runtime.failureLevels.map {
+                AudioDuckingRecoveryJournal.FailureEvidence.Levels(before: $0.before, target: $0.target, observed: $0.observed)
+            }
+            do { try journal?.recordFailure(reason: runtime.failureReason, levels: evidenceLevels, now: Date()) }
+            catch { logger.error("Could not preserve audio failure diagnostics; original recovery evidence retained") }
             logger.warning("Audio status \(String(describing: status), privacy: .public), reason \(self.runtime.failureReason, privacy: .public)")
             if let levels = runtime.failureLevels {
                 logger.warning("Audio scalar before=\(levels.before, privacy: .public) target=\(levels.target, privacy: .public) observed=\(levels.observed, privacy: .public)")
             }
         }
         statusChanged(status)
+        if status == .incomplete || quarantined { scheduleIdleRecovery() }
     }
 
     private func removeDeviceListeners() {

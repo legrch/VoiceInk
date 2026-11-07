@@ -102,6 +102,18 @@ final class AudioDuckingEventLatch {
         return true
     }
 
+    /// An idle failed-cycle reset retires its event lease atomically. A route
+    /// or sleep event observed during archival vetoes this exact reset attempt.
+    func retireIfCurrent(_ expectedEpoch: UInt64) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard epoch == expectedEpoch else { return false }
+        epoch &+= 1
+        token = nil
+        admittedEpoch = nil
+        mutePauseEpoch = nil
+        return true
+    }
+
     func clear(_ token: AudioDuckingLease.Token) {
         lock.lock(); defer { lock.unlock() }
         guard self.token == token else { return }

@@ -38,9 +38,9 @@ The installer does not create a profile or launch the app. VoiceInk creates its 
 
 The package does not include anyone's settings, API keys, transcription models or machine-specific Karabiner mappings. Choose your own shortcut in VoiceInk. Automatic updates are disabled; install subsequent personal releases explicitly. Intel builds are not provided in this release.
 
-A matching volume notification is not a writer-specific completion receipt. Held recovery evidence is never silently discarded just because the current volume differs; explicit reset is required.
+If an audio change fails, the recording remains available. After capture stops, the app archives the failed cycle, cancels its timers/listeners and prepares a new cycle from the actual current volume. Switching **Lower Audio While Recording** off/on also retries idle recovery. Device-specific percentages and fade settings are preserved; a restart or a Reset button is not part of normal recovery.
 
-If ducking pauses after an interruption, first set a comfortable system volume, then click **Reset Audio Ducking** when it appears, or turn **Lower Audio While Recording** off and on. This explicitly archives the current output's recovery evidence and enables a fresh session without changing volume or claiming an old write was confirmed/cancelled. A current-process unsettled write stays blocked for that output even after a timeout or device switch; resetting does not erase that quarantine. Quit VoiceInk, set a comfortable volume and reopen it before explicitly acknowledging historical evidence. Restarting does not prove an old hardware effect was cancelled. Unavailable output or unreadable evidence also keeps reset blocked.
+Automatic idle recovery prioritizes availability. It does not prove that an old macOS request completed or was cancelled, so a delayed hardware effect can still arrive. Recovery itself never writes a guessed baseline. Invalid/unreadable evidence or unavailable hardware defers audio effects rather than interfering with recording. Diagnostic failure files retain the original record and the first observed before/target/readback values; `scripts/personal-audio-diagnostics.sh` reads them without changing audio.
 
 ## Upstream 2.25 compatibility notes
 

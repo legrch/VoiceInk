@@ -2171,3 +2171,55 @@ aliasOutput.deliverPendingWrite()
 let aliasStillBlocked = try aliasJournal.isAcknowledgedDeviceBlocked("notification-alias")
 check(aliasStillBlocked, "even a late effect cannot automatically release the held UID")
 print("Uncorrelated notification, held evidence and replacement-admission checks passed")
+
+// Owner-selected automatic recovery is an availability policy, not a claim
+// that elapsed time, a readback or an archive cancels an asynchronous effect.
+var automaticActivity = AudioDuckingCaptureActivity()
+let automaticA = UUID(), automaticB = UUID()
+automaticActivity.begin(automaticA)
+check(!automaticActivity.isIdle, "live capture excludes automatic recovery")
+automaticActivity.begin(automaticB)
+check(!automaticActivity.end(automaticA) && !automaticActivity.isIdle,
+      "stale Stop cannot authorize reset of a replacement capture")
+check(automaticActivity.end(automaticB) && automaticActivity.isIdle,
+      "actual capture end permits failed-cycle recovery independently of transcription")
+var automaticFences = AudioDuckingUnsettledWrites()
+automaticFences.retain("notification-alias")
+automaticFences.retain("other-device")
+let automaticWriteCount = aliasOutput.writes.count
+let automaticPending = try aliasJournal.pendingRecovery(for: "notification-alias")!.1
+let automaticReset = try aliasJournal.acknowledge(uid: "notification-alias", observed: aliasOutput.readDefault()!,
+    now: Date(), reason: .automaticIdleRecovery, commit: { operation in
+        guard automaticActivity.isIdle else { return false }
+        try operation()
+        return true
+    })
+if automaticReset { automaticFences.releaseAfterIdleArchive("notification-alias") }
+check(automaticReset && automaticFences.allows("notification-alias") && !automaticFences.allows("other-device"),
+      "durable idle recovery releases only the selected UID's cycle fence")
+check(aliasOutput.writes.count == automaticWriteCount, "idle recovery performs no volume setter")
+let automaticReceiptPath = aliasDirectory.appendingPathComponent("accepted-\(automaticPending.cycleID.uuidString).json")
+let automaticReceipt = try JSONDecoder().decode(AudioDuckingRecoveryJournal.Acknowledgment.self, from: Data(contentsOf: automaticReceiptPath))
+check(automaticReceipt.record == automaticPending && automaticReceipt.reason == "automatic_idle_recovery",
+      "automatic archive preserves the original phase instead of claiming cancellation")
+let automaticRuntime = AudioDuckingRuntime(output: aliasOutput, journal: aliasJournal)
+let automaticToken = automaticRuntime.begin(sessionID: UUID(), desired: aliasConfig)
+check(automaticToken != nil && automaticRuntime.capturedOutput?.values == aliasOutput.readDefault()?.values,
+      "next recording captures actual current volume rather than the failed cycle's baseline")
+print("Automatic idle recovery, stale Stop, per-UID archival and fresh-baseline checks passed")
+
+let idleRetirementLatch = AudioDuckingEventLatch()
+var idleRetirementLease = AudioDuckingLease()
+let idleRetirementToken = idleRetirementLease.begin(UUID())
+let idleRetirementEpoch = idleRetirementLatch.currentEpoch()
+check(idleRetirementLatch.admit(idleRetirementToken, observedEpoch: idleRetirementEpoch), "test cycle is admitted")
+_ = idleRetirementLatch.invalidate()
+check(!idleRetirementLatch.retireIfCurrent(idleRetirementEpoch), "an event during archival vetoes stale retirement")
+let nextIdleEpoch = idleRetirementLatch.currentEpoch()
+let nextIdleToken = idleRetirementLease.begin(UUID())
+check(idleRetirementLatch.admit(nextIdleToken, observedEpoch: nextIdleEpoch), "replacement event lease is admitted")
+check(!idleRetirementLatch.retireIfCurrent(idleRetirementEpoch) && idleRetirementLatch.permits(nextIdleToken),
+      "stale reset cannot retire the replacement event lease")
+check(idleRetirementLatch.retireIfCurrent(nextIdleEpoch) && !idleRetirementLatch.permits(nextIdleToken),
+      "current idle reset prevents all future old-token writes")
+print("Idle archival event veto and atomic lease retirement checks passed")

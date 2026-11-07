@@ -49,13 +49,13 @@
 	<key>CFBundleShortVersionString</key>
 	<string>2.25</string>
 	<key>CFBundleVersion</key>
-	<string>1002</string>
+	<string>1003</string>
 	<key>VoiceInkPlusProduct</key>
 	<string>VoiceInk Plus</string>
 	<key>VoiceInkPlusRevision</key>
-	<string>2</string>
+	<string>3</string>
 	<key>VoiceInkPlusTag</key>
-	<string>plus-v2.25-r2</string>
+	<string>plus-v2.25-r3</string>
 	<key>VoiceInkUpstreamCommit</key>
 	<string>228f4217445f49b667a16e91cc59a1bb1c83ad23</string>
 </dict>
