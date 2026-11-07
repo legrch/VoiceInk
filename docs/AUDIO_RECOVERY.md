@@ -1,6 +1,6 @@
 # Automatic audio recovery
 
-The r3 candidate uses an availability-oriented recovery policy. The published r2 retains its earlier explicit-reset behavior.
+r3 uses an availability-oriented recovery policy. Earlier r2 used explicit reset.
 
 ## Capture and effect lifetimes
 
@@ -22,4 +22,4 @@ The first failed cycle observation is stored in a private `failure-<cycle>.json`
 
 ## Qualification
 
-Pure lifecycle/journal tests and a signed application build establish source preparation. Speaker/AirPods trials establish only the hardware behavior actually observed. The r3 candidate is not a published release until its separate review and release workflow completes.
+Pure lifecycle/journal tests and a signed application build establish source preparation. Speaker/AirPods trials establish only the hardware behavior actually observed. Publication requires the separate review and release workflow.
