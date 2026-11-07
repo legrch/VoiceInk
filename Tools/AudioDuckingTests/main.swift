@@ -2129,3 +2129,45 @@ for failure in ["journal-failure", "route", "sleep"] {
     try FileManager.default.removeItem(at: directory)
 }
 print("Both sides of mute lease transfer, durable relaunch and post-transfer failure matrix passed")
+
+// A property notification has no writer/request identifier. A matching external
+// change may look confirmed while the adapter still retains a delayed effect.
+// Switching outputs must not turn such held evidence into new write admission.
+let aliasDirectory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("voiceink-notification-alias-\(UUID().uuidString)")
+defer { try? FileManager.default.removeItem(at: aliasDirectory) }
+let aliasJournal = try AudioDuckingRecoveryJournal(directory: aliasDirectory)
+let aliasOutput = FakeOutput()
+func aliasSnapshot(_ value: Float) -> AudioDuckingOutputSnapshot {
+    AudioDuckingOutputSnapshot(deviceID: 1, uid: "notification-alias", elements: [0], values: [value], muted: false)
+}
+aliasOutput.devices[1] = aliasSnapshot(1)
+aliasOutput.requiresWriteNotification = true
+aliasOutput.deferWrites = true
+var aliasConfig = AudioDuckingConfiguration(mode: .duck)
+aliasConfig.retainedPercent = 80
+aliasConfig.fadeDownSeconds = 0
+aliasConfig.fadeUpSeconds = 0
+aliasConfig.restoreDelaySeconds = 0
+let aliasRuntime = AudioDuckingRuntime(output: aliasOutput, journal: aliasJournal)
+let aliasToken = aliasRuntime.begin(sessionID: UUID(), desired: aliasConfig)!
+aliasRuntime.activate(token: aliasToken, now: 0)
+check(aliasOutput.pendingWrite != nil, "the notification-alias adapter retains a delayed setter")
+aliasOutput.devices[1] = aliasSnapshot(0.8)
+aliasRuntime.volumeChanged(token: aliasToken, now: 0.01, observed: aliasSnapshot(0.8))
+aliasRuntime.invalidate(token: aliasToken)
+if case .record(let evidence) = try aliasJournal.read() {
+    try aliasJournal.holdMissingDevice(evidence)
+} else { check(false, "invalidation retains evidence even when a notification matched") }
+aliasOutput.devices[1] = aliasSnapshot(0.1)
+let aliasAllowed = try aliasJournal.admitsNewAudioEffect(forUID: "notification-alias")
+check(!aliasAllowed, "a different user volume never silently releases held evidence")
+let aliasLatch = AudioDuckingEventLatch()
+var aliasCompetingWrite = false
+let aliasMuteAllowed = RecordingMuteAdmission.perform(deviceID: 1, journal: aliasJournal,
+    unsettled: AudioDuckingUnsettledWrites(), latch: aliasLatch,
+    readIdentity: { (1, "notification-alias") }, operation: { aliasCompetingWrite = true; return true })
+check(!aliasMuteAllowed && !aliasCompetingWrite, "the real delayed-mute admission cannot compete with held evidence")
+aliasOutput.deliverPendingWrite()
+let aliasStillBlocked = try aliasJournal.isAcknowledgedDeviceBlocked("notification-alias")
+check(aliasStillBlocked, "even a late effect cannot automatically release the held UID")
+print("Uncorrelated notification, held evidence and replacement-admission checks passed")

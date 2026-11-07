@@ -8,6 +8,8 @@ trap 'rm -rf "$test_root"' EXIT
 mkdir "$test_root/target"
 target="$test_root/target/VoiceInk.app"
 installer="$root/scripts/install.sh"
+release_version=$(sed -n 's/^VERSION=//p' "$installer")
+[[ -n "$release_version" ]]
 bash -n "$installer"
 # Only process-query responses are simulated. Bundle, checksum, certificate,
 # staging, backup and rename operations use the real signed archive and files.
@@ -21,7 +23,7 @@ fi
 install_fixture --version latest --archive "$archive" --destination "$target"
 codesign --verify --deep --strict "$target"
 original=$(shasum -a 256 "$target/Contents/MacOS/VoiceInk" | awk '{print $1}')
-install_fixture --version plus-v2.25-r1 --archive "$archive" --destination "$target"
+install_fixture --version "$release_version" --archive "$archive" --destination "$target"
 [[ $(find "$test_root/target/VoiceInk-Personal-Backups" -name VoiceInk.app -type d | wc -l | tr -d ' ') == 1 ]]
 if bash -c '
   source "$1"

@@ -49,9 +49,13 @@ struct AudioSetupView: View {
             Section {
                 Toggle("Lower Audio While Recording", isOn: duckingEnabled)
                 if mediaController.duckingQuarantined || mediaController.canAcknowledgeDuckingRecovery {
+                    Button("Reset Audio Ducking") {
+                        mediaController.acknowledgeDuckingRecovery()
+                    }
+                    .disabled(!mediaController.canAcknowledgeDuckingRecovery)
                     Text(mediaController.canAcknowledgeDuckingRecovery
-                        ? "Check system volume, then switch this off and on to reset."
-                        : "An audio change is unresolved. Quit VoiceInk, check system volume, then reopen it.")
+                        ? "Set a comfortable system volume, then reset. Your current volume stays unchanged."
+                        : "Finish recording first. If Reset stays unavailable, quit VoiceInk, check system volume, then reopen it.")
                         .foregroundStyle(.secondary)
                         .help("Reset archives recovery evidence without changing volume. It does not cancel a previously pending system change.")
                 }
@@ -74,10 +78,12 @@ struct AudioSetupView: View {
                     volumeRow("Volume During Recording") {
                         Slider(value: deviceRetainedPercent, in: 0...100, step: 1)
                             .accessibilityLabel("Volume during recording percent")
+                            .disabled(mediaController.audioOutputUID == nil)
                         TextField("", value: deviceRetainedPercent, format: .number.precision(.fractionLength(0)))
                             .frame(width: 37)
                             .multilineTextAlignment(.trailing)
                             .accessibilityLabel("Retained volume percent")
+                            .disabled(mediaController.audioOutputUID == nil)
                         Text("%").frame(width: 14)
                     }
                     duckingSeconds("Fade Duration", keyPath: \.fadeDownSeconds)
@@ -136,6 +142,8 @@ struct AudioSetupView: View {
     private var duckingEnabled: Binding<Bool> {
         Binding(get: { duckingSettings.configuration.mode == .duck }, set: { enabled in
             if enabled {
+                // Recheck output readiness before using cached UI flags.
+                mediaController.refreshOutputVolume()
                 if mediaController.duckingQuarantined || mediaController.canAcknowledgeDuckingRecovery {
                     guard mediaController.acknowledgeDuckingRecovery(reason: .userReenabledDucking) else { return }
                 }
@@ -161,8 +169,10 @@ struct AudioSetupView: View {
 
     private var deviceRetainedPercent: Binding<Double> {
         Binding(get: { duckingSettings.configuration.retainedPercent(for: mediaController.audioOutputUID) }, set: { newValue in
+            mediaController.refreshOutputVolume()
+            guard let uid = mediaController.audioOutputUID else { return }
             var value = duckingSettings.configuration
-            value.setRetainedPercent(newValue.rounded(), for: mediaController.audioOutputUID)
+            value.setRetainedPercent(newValue.rounded(), for: uid)
             if duckingSettings.set(value) { mediaController.updateDuckingLevel(newValue) }
         })
     }

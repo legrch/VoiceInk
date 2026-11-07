@@ -68,6 +68,13 @@ final class MediaController: ObservableObject {
     }
 
     func refreshOutputVolume() {
+        // Output identity and readiness may become readable after the route
+        // callback, without another status transition.
+        let identity = duckingService?.currentOutputIdentity
+        audioOutputUID = identity?.uid
+        audioOutputName = identity?.name
+        duckingQuarantined = duckingService?.isQuarantined == true
+        canAcknowledgeDuckingRecovery = duckingService?.canAcknowledgeRecovery == true
         let reading = duckingService?.currentVolumeReading
         currentOutputVolumePercent = reading?.percent
         outputRestoreVolumePercent = reading?.restorePercent

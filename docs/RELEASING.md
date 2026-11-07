@@ -5,7 +5,7 @@ Status: owner-approved convention. The Plus metadata, About panel and installer 
 ## Published baseline
 
 - Keep the published `personal-2.25.1` tag and assets unchanged. Its application reports upstream version `2.25`, build `225`.
-- `latest` selects `plus-v2.25-r1`; the bootstrap retains a separate immutable installer pin for exact `personal-2.25.1` requests.
+- `latest` selects `plus-v2.25-r2`; the bootstrap retains a separate immutable installer pin for exact `personal-2.25.1` requests.
 - The public install/update command remains the one at the top of [README](../README.md).
 
 ## VoiceInk Plus versions
@@ -31,7 +31,7 @@ Keep the full upstream version and our release revision separate. Do not reserve
 1. Edit `release/plus.json`, incrementing the numeric build for every published release, then run `python3 scripts/plus-release.py sync-info` and `Tools/PlusReleaseTests/run.sh`.
 2. Run audio checks and a signed Release build with `LOCAL_BUILD` and `LocalBuild.xcconfig`. `scripts/personal-build.sh` validates metadata before and after building, without installation. For an established reusable DerivedData lane, keep the same arguments and call `python3 scripts/plus-release.py check --app /path/VoiceInk.app` after build.
 3. Package once into a fresh directory: `python3 scripts/plus-release.py package --app /path/VoiceInk.app --output /private/tmp/plus-assets`. It derives the tag/asset name, checks the bundle/signature and includes GPL/source pointers. It refuses to overwrite an archive.
-4. Run `python3 scripts/plus-release.py pin-installer --archive /private/tmp/plus-assets/VoiceInk-Plus-2.25-r1-AppleSilicon.zip`. Commit the installer and app changes, then run `python3 scripts/plus-release.py pin-bootstrap --commit FULL_INSTALLER_COMMIT` and commit the bootstrap. The immutable installer pins archive bytes; the bootstrap pins installer bytes and retains the legacy exact-version route.
+4. Run `python3 scripts/plus-release.py pin-installer --archive /private/tmp/plus-assets/VoiceInk-Plus-2.25-r2-AppleSilicon.zip`. Commit the installer and app changes, then run `python3 scripts/plus-release.py pin-bootstrap --commit FULL_INSTALLER_COMMIT` and commit the bootstrap. The immutable installer pins archive bytes; the bootstrap pins installer bytes and retains the legacy exact-version route.
 5. Run audio/metadata/bootstrap tests, real signed archive install/update/rollback fixtures and a composed build. Freeze the complete candidate, close the risk-selected review and merge through a reviewed merge commit with required checks green.
 6. Copy the committed `scripts/install.sh` into the release assets as `install.sh`; generate `SHA256SUMS` for it and the app archive. Publish the derived tag/title on the accepted source; keep old tags/assets immutable. Verify downloaded assets and the public one-command bootstrap in an isolated destination before announcing availability. App identity changes require a fresh signed build and new archive/pins.
 
@@ -55,7 +55,7 @@ The existing upstream `scripts/release.sh` assumes `v$SHORT_VERSION` and generat
 
 - Automatic updates remain off. A future own update channel is a separate implementation and qualification decision.
 - Preserve existing data paths, settings and output-specific levels. Do not include personal settings, credentials, models, recovery journals or machine-specific key mappings in releases.
-- Install only after VoiceInk has quit; retain the old app and data backup with a rollback path. Never force-quit an active recording to deploy an update.
+- Install only after VoiceInk has quit; retain the old app and data backup with a rollback path. The owner authorizes verified local updates without another confirmation when the app is closed, or after a normal Quit when it is confirmed idle (no recording or transcription). Verify process exit before replacement. If activity is uncertain, defer replacement and ask the owner to finish. Never force-quit an active recording to deploy an update.
 - Unit/source checks, signed build, independent review, publication, installation and owner-confirmed music trials are separate evidence. Check speakers and AirPods for audio changes; do not claim unsupported outputs work.
 
 ## References
