@@ -412,6 +412,11 @@ final class AudioDuckingRuntime {
             // No setter is pending here. A different current value belongs to
             // the user, so relinquish and remove the old recovery obligation.
             failureReason = "user_volume_changed"
+            if let before = lease.lastConfirmed?.first, let target = lease.baseline?.first,
+               let observed = current.values.first {
+                failureLevels = (before, target, observed)
+            }
+            preserveFailureEvidence()
             do { try journal?.clear() }
             catch { unresolvedWrite = true; cleanupUnsafe = true }
             relinquish(token: token, incomplete: true)
@@ -578,6 +583,11 @@ final class AudioDuckingRuntime {
             guard let latest = output.readDefault(), latest == current else { return }
             if adoptUserLevel(current, token: token) { return }
             failureReason = "user_volume_changed"
+            if let before = lease.lastConfirmed?.first, let target = lease.baseline?.first,
+               let observed = current.values.first {
+                failureLevels = (before, target, observed)
+            }
+            preserveFailureEvidence()
             do { try journal?.clear() }
             catch { unresolvedWrite = true; cleanupUnsafe = true }
             relinquish(token: token, incomplete: ownership != nil)
@@ -688,8 +698,17 @@ final class AudioDuckingRuntime {
         relinquish(token: token, incomplete: ownership != nil)
     }
 
+    private func preserveFailureEvidence() {
+        let levels = failureLevels.map {
+            AudioDuckingRecoveryJournal.FailureEvidence.Levels(before: $0.before, target: $0.target, observed: $0.observed)
+        }
+        // Observability must never confirm or retire the active obligation.
+        try? journal?.recordFailure(reason: failureReason, levels: levels, now: Date())
+    }
+
     private func relinquish(token: AudioDuckingLease.Token, incomplete: Bool) {
         guard token == lease.token else { return }
+        preserveFailureEvidence()
         deferredBegin = nil
         asyncFrame = nil
         retainedLevelIntent = nil

@@ -2223,3 +2223,49 @@ check(!idleRetirementLatch.retireIfCurrent(idleRetirementEpoch) && idleRetiremen
 check(idleRetirementLatch.retireIfCurrent(nextIdleEpoch) && !idleRetirementLatch.permits(nextIdleToken),
       "current idle reset prevents all future old-token writes")
 print("Idle archival event veto and atomic lease retirement checks passed")
+
+// Diagnostics must survive the actual paths that retire/move active evidence.
+for notify in [false, true] {
+    let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("voiceink-restore-diagnostic-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let journal = try AudioDuckingRecoveryJournal(directory: dir)
+    let output = makeOutput([0.6])
+    output.requiresWriteNotification = true; output.deferWrites = true
+    var config = AudioDuckingConfiguration(mode: .duck)
+    config.fadeDownSeconds = 0; config.fadeUpSeconds = 1; config.restoreDelaySeconds = 0
+    let runtime = AudioDuckingRuntime(output: output, journal: journal)
+    let token = runtime.begin(sessionID: UUID(), desired: config)!
+    runtime.activate(token: token, now: 0)
+    output.deliverPendingWrite()
+    runtime.volumeChanged(token: token, now: 0.1, observed: output.readDefault())
+    runtime.end(token: token, now: 1)
+    let previous = output.devices[1]!
+    output.devices[1] = AudioDuckingOutputSnapshot(deviceID: previous.deviceID, uid: previous.uid,
+        elements: previous.elements, values: [0.2], muted: previous.muted)
+    if notify { runtime.volumeChanged(token: token, now: 1.1, observed: output.devices[1]) }
+    else { runtime.tick(token: token, now: 1.1) }
+    if case .absent = try journal.read() {} else { check(false, "manual restoration change relinquishes active evidence") }
+    let file = dir.appendingPathComponent("failure-\(token.cycleID.uuidString).json")
+    let evidence = try JSONDecoder().decode(AudioDuckingRecoveryJournal.FailureEvidence.self, from: Data(contentsOf: file))
+    check(evidence.reason == "user_volume_changed" && evidence.record.cycleID == token.cycleID &&
+          evidence.levels?.observed == 0.2, "both restoration retirement paths persist their original failure before clear")
+}
+let movedDir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("voiceink-route-diagnostic-\(UUID().uuidString)")
+defer { try? FileManager.default.removeItem(at: movedDir) }
+let movedJournal = try AudioDuckingRecoveryJournal(directory: movedDir)
+let movedOutput = makeOutput([0.6])
+movedOutput.requiresWriteNotification = true; movedOutput.deferWrites = true
+var movedConfig = AudioDuckingConfiguration(mode: .duck); movedConfig.fadeDownSeconds = 0
+let movedRuntime = AudioDuckingRuntime(output: movedOutput, journal: movedJournal)
+let movedToken = movedRuntime.begin(sessionID: UUID(), desired: movedConfig)!
+movedRuntime.activate(token: movedToken, now: 0)
+movedOutput.deliverPendingWrite()
+movedRuntime.volumeChanged(token: movedToken, now: 0.1, observed: movedOutput.readDefault())
+movedRuntime.invalidate(token: movedToken)
+if case .record(let record) = try movedJournal.read() { try movedJournal.holdMissingDevice(record) }
+else { check(false, "route invalidation preserves its record before hold") }
+let movedEvidence = try JSONDecoder().decode(AudioDuckingRecoveryJournal.FailureEvidence.self,
+    from: Data(contentsOf: movedDir.appendingPathComponent("failure-\(movedToken.cycleID.uuidString).json")))
+check(movedEvidence.reason == "device_or_sleep_invalidated" && movedEvidence.record.cycleID == movedToken.cycleID,
+      "route invalidation diagnostics survive moving the active record and replacing runtime")
+print("Route hold and both interrupted-restoration diagnostic integration checks passed")

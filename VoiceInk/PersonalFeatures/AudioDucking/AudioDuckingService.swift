@@ -777,6 +777,11 @@ final class AudioDuckingService {
               let identity = AudioDuckingCoreAudio().currentOutputIdentity(),
               identity.uid != record.deviceUID else { return false }
         do {
+            let levels = runtime.failureLevels.map {
+                AudioDuckingRecoveryJournal.FailureEvidence.Levels(before: $0.before, target: $0.target, observed: $0.observed)
+            }
+            try? journal.recordFailure(reason: runtime.failureReason == "none" ? "output_changed_before_recovery" : runtime.failureReason,
+                                       levels: levels, now: Date())
             try journal.holdMissingDevice(record)
             timer?.cancel(); timer = nil
             if let token = runtime.lease.token { _ = latch.invalidate(ifCurrent: token); latch.clear(token) }
