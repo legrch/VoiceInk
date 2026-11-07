@@ -8,15 +8,15 @@ umask 077
 
 bootstrap_fail() { printf 'Error: %s\n' "$*" >&2; exit 1; }
 bootstrap_usage() {
-    printf '%s\n' 'Usage: install-release.sh [latest|plus-v2.25-r2|personal-2.25.1] [--destination /path/VoiceInk.app]'
+    printf '%s\n' 'Usage: install-release.sh [latest|plus-v2.25-r3|personal-2.25.1] [--destination /path/VoiceInk.app]'
 }
 install_release() {
     selected=${1-latest}
     [ "$#" -eq 0 ] || shift
     case "$selected" in
         --help|-h) [ "$#" -eq 0 ] || bootstrap_fail 'Unexpected arguments'; bootstrap_usage; return ;;
-        latest|plus-v2.25-r2|personal-2.25.1) ;;
-        *) bootstrap_fail 'Unknown version. Use latest, plus-v2.25-r2 or personal-2.25.1.' ;;
+        latest|plus-v2.25-r3|personal-2.25.1) ;;
+        *) bootstrap_fail 'Unknown version. Use latest, plus-v2.25-r3 or personal-2.25.1.' ;;
     esac
     destination=/Applications/VoiceInk.app
     destination_seen=false
@@ -30,8 +30,8 @@ install_release() {
     done
     # The underlying installer validates platform, destination, processes and bundle.
     # Updating these two pins is an explicit, reviewed release operation.
-    plus_installer_url=https://raw.githubusercontent.com/legrch/VoiceInk/50b7ec131e73c5e7123f6749cd36f39b5ed6c843/scripts/install.sh
-    plus_installer_sha256=fc457b76e48dd9876d738b470a17c9f1dc3d962df3178535e59c8491791858d9
+    plus_installer_url=https://raw.githubusercontent.com/legrch/VoiceInk/9dfb2f96053530cb96db2c64ac86db3c5c6ea508/scripts/install.sh
+    plus_installer_sha256=b3bb5326d8d25a5d72d3758f4240d3358745d62880a4729edfab9afad868fafa
     case "$selected" in
         personal-2.25.1)
             installer_url=https://raw.githubusercontent.com/legrch/VoiceInk/7852619a59ba84f34e386019c55eaf8fa1ba5eeb/scripts/install.sh

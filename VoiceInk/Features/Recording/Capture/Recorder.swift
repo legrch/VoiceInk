@@ -123,6 +123,7 @@ class Recorder: NSObject, ObservableObject {
             }
         }
         guard self.playbackSessionID == playbackSessionID else { return }
+        if let playbackSessionID { mediaController.recordingCaptureEnded(sessionID: playbackSessionID) }
         onAudioChunk = nil
 
         resetAudioMeter()
@@ -252,6 +253,10 @@ class Recorder: NSObject, ObservableObject {
             NotificationCenter.default.removeObserver(observer)
         }
         recorder?.teardown()
+        if let sessionID = playbackSessionID {
+            let controller = mediaController
+            Task { @MainActor in controller.recordingCaptureEnded(sessionID: sessionID) }
+        }
     }
 }
 

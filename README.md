@@ -20,7 +20,7 @@ curl -fsSL https://raw.githubusercontent.com/legrch/VoiceInk/main/scripts/instal
 
 The same command handles first installation and updates. It verifies the pinned installer, release archive and app signature, backs up an existing app and its data, and installs to `/Applications/VoiceInk.app` with rollback on replacement failure. Then open **VoiceInk** from Applications. No Xcode, Git, patches, signing certificate or sudo is needed.
 
-This command trusts the bootstrap script maintained in this fork's `main`; it checks the immutable installation payload before executing it. `latest` selects **VoiceInk Plus 2.25 · r2** (`plus-v2.25-r2`, build `1002`). Future published releases update the reviewed bootstrap pins, so the command stays the same. To select this release explicitly, replace `latest` with `plus-v2.25-r2`. The historical `personal-2.25.1` remains available by its exact name.
+This command trusts the bootstrap script maintained in this fork's `main`; it checks the immutable installation payload before executing it. `latest` selects **VoiceInk Plus 2.25 · r3** (`plus-v2.25-r3`, build `1003`). Future published releases update the reviewed bootstrap pins, so the command stays the same. To select this release explicitly, replace `latest` with `plus-v2.25-r3`. The historical `personal-2.25.1` remains available by its exact name.
 
 **Apple Silicon (M1 or later), macOS 15+.** This build is locally signed, **not Apple-notarized**. If macOS asks, approve this trusted copy in **System Settings > Privacy & Security > Open Anyway** ([Apple's instructions](https://support.apple.com/en-gb/102445)). First launch uses VoiceInk's normal microphone/Accessibility and model/provider setup. The installer never changes Gatekeeper or creates a personal profile on your behalf.
 
@@ -38,9 +38,9 @@ The installer does not create a profile or launch the app. VoiceInk creates its 
 
 The package does not include anyone's settings, API keys, transcription models or machine-specific Karabiner mappings. Choose your own shortcut in VoiceInk. Automatic updates are disabled; install subsequent personal releases explicitly. Intel builds are not provided in this release.
 
-A matching volume notification is not a writer-specific completion receipt. Held recovery evidence is never silently discarded just because the current volume differs; explicit reset is required.
+If an audio change fails, the recording remains available. After capture stops, the app archives the failed cycle, cancels its timers/listeners and prepares a new cycle from the actual current volume. Switching **Lower Audio While Recording** off/on also retries idle recovery. Device-specific percentages and fade settings are preserved; a restart or a Reset button is not part of normal recovery.
 
-If ducking pauses after an interruption, first set a comfortable system volume, then click **Reset Audio Ducking** when it appears, or turn **Lower Audio While Recording** off and on. This explicitly archives the current output's recovery evidence and enables a fresh session without changing volume or claiming an old write was confirmed/cancelled. A current-process unsettled write stays blocked for that output even after a timeout or device switch; resetting does not erase that quarantine. Quit VoiceInk, set a comfortable volume and reopen it before explicitly acknowledging historical evidence. Restarting does not prove an old hardware effect was cancelled. Unavailable output or unreadable evidence also keeps reset blocked.
+Automatic idle recovery prioritizes availability. It does not prove that an old macOS request completed or was cancelled, so a delayed hardware effect can still arrive. Recovery itself never writes a guessed baseline. Invalid/unreadable evidence or unavailable hardware defers audio effects rather than interfering with recording. Diagnostic failure files retain the original record and the first observed before/target/readback values; `scripts/personal-audio-diagnostics.sh` reads them without changing audio.
 
 ## Upstream 2.25 compatibility notes
 
@@ -50,7 +50,7 @@ Canceling a batch transcription can leave recording temporarily unavailable unti
 
 ## Fork development
 
-Maintainers: read [release/version conventions and the upstream update procedure](docs/RELEASING.md) before preparing a release. **VoiceInk Plus** preserves the upstream version and adds a separate revision such as `plus-v2.25-r2`; the existing `personal-2.25.1` release remains unchanged.
+Maintainers: read [release/version conventions and the upstream update procedure](docs/RELEASING.md) before preparing a release. **VoiceInk Plus** preserves the upstream version and adds a separate revision such as `plus-v2.25-r3`; the existing `personal-2.25.1` release remains unchanged.
 
 - `main` is the stable personal fork; use feature branches and reviewed `--no-ff` merge commits (no squash or rebase merges).
 - `upstream` points to `Beingpax/VoiceInk`; `origin` points to `legrch/VoiceInk`.

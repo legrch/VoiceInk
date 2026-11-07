@@ -8,11 +8,23 @@ import Foundation
             .appendingPathComponent("Library/Application Support/com.prakashjoshipax.VoiceInk/PersonalAudioDucking", isDirectory: true)
         guard FileManager.default.fileExists(atPath: dir.path) else { print("recovery journal: absent"); return }
         let entries = try FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
-            .filter { $0.lastPathComponent == "recovery-v1.json" || (($0.lastPathComponent.hasPrefix("acknowledged-") || $0.lastPathComponent.hasPrefix("held-") || $0.lastPathComponent.hasPrefix("accepted-")) && $0.pathExtension == "json") }
+            .filter { $0.lastPathComponent == "recovery-v1.json" || (($0.lastPathComponent.hasPrefix("acknowledged-") || $0.lastPathComponent.hasPrefix("held-") || $0.lastPathComponent.hasPrefix("accepted-") || $0.lastPathComponent.hasPrefix("failure-")) && $0.pathExtension == "json") }
             .sorted { $0.lastPathComponent < $1.lastPathComponent }
         guard !entries.isEmpty else { print("recovery journal: absent"); return }
         let output = AudioDuckingCoreAudio()
         for file in entries {
+            if file.lastPathComponent.hasPrefix("failure-") {
+                guard let bytes = try? Data(contentsOf: file), bytes.count <= 65_536,
+                      let evidence = try? JSONDecoder().decode(AudioDuckingRecoveryJournal.FailureEvidence.self, from: bytes) else {
+                    print("failure evidence: invalid"); continue
+                }
+                print("failure: \(evidence.reason), at: \(evidence.observedAt), UID: \(evidence.record.deviceUID)")
+                if let levels = evidence.levels {
+                    print("failure before: \(levels.before); target: \(levels.target); readback: \(levels.observed)")
+                }
+                print("original failure phase: \(evidence.record.phase.rawValue); cycle: \(evidence.record.cycleID)")
+                continue
+            }
             if file.lastPathComponent.hasPrefix("accepted-") {
                 guard let bytes = try? Data(contentsOf: file), bytes.count <= 65_536,
                       let receipt = try? JSONDecoder().decode(AudioDuckingRecoveryJournal.Acknowledgment.self, from: bytes), receipt.record.isValid else {

@@ -48,16 +48,9 @@ struct AudioSetupView: View {
 
             Section {
                 Toggle("Lower Audio While Recording", isOn: duckingEnabled)
-                if mediaController.duckingQuarantined || mediaController.canAcknowledgeDuckingRecovery {
-                    Button("Reset Audio Ducking") {
-                        mediaController.acknowledgeDuckingRecovery()
-                    }
-                    .disabled(!mediaController.canAcknowledgeDuckingRecovery)
-                    Text(mediaController.canAcknowledgeDuckingRecovery
-                        ? "Set a comfortable system volume, then reset. Your current volume stays unchanged."
-                        : "Finish recording first. If Reset stays unavailable, quit VoiceInk, check system volume, then reopen it.")
+                if mediaController.duckingQuarantined {
+                    Text("Audio recovery is pending. Ducking will retry automatically after recording stops or on the next recording.")
                         .foregroundStyle(.secondary)
-                        .help("Reset archives recovery evidence without changing volume. It does not cancel a previously pending system change.")
                 }
 
                 if duckingSettings.configuration.mode == .duck {
@@ -142,13 +135,12 @@ struct AudioSetupView: View {
     private var duckingEnabled: Binding<Bool> {
         Binding(get: { duckingSettings.configuration.mode == .duck }, set: { enabled in
             if enabled {
-                // Recheck output readiness before using cached UI flags.
-                mediaController.refreshOutputVolume()
-                if mediaController.duckingQuarantined || mediaController.canAcknowledgeDuckingRecovery {
-                    guard mediaController.acknowledgeDuckingRecovery(reason: .userReenabledDucking) else { return }
-                }
+                mediaController.resetDuckingWhenIdle()
                 setAudioMode(.duck)
-            } else if duckingSettings.configuration.mode == .duck { setAudioMode(.unchanged) }
+            } else if duckingSettings.configuration.mode == .duck {
+                setAudioMode(.unchanged)
+                mediaController.resetDuckingWhenIdle()
+            }
         })
     }
 
