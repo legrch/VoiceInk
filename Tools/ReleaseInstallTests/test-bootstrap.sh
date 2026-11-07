@@ -16,6 +16,8 @@ if [[ -n "$pinned_commit" ]]; then
     payload="$fixture/pinned-install.sh"
     git -C "$root" show "$pinned_commit:scripts/install.sh" > "$payload"
 fi
+release_version=$(sed -n 's/^VERSION=//p' "$payload")
+[[ -n "$release_version" ]]
 cat > "$fixture/runner.sh" <<'RUNNER'
 #!/bin/bash
 source "$1"
@@ -66,9 +68,9 @@ sed -n '2,6p' "$fixture/explicit/invocation" > "$fixture/actual"
 printf '%s\n' --version personal-2.25.1 --replace-existing --destination "$fixture/a directory/VoiceInk.app" > "$fixture/expected"
 cmp "$fixture/actual" "$fixture/expected"
 assert_cleaned explicit
-run_case good plus plus-v2.25-r1
+run_case good plus "$release_version"
 sed -n '2,6p' "$fixture/plus/invocation" > "$fixture/actual"
-printf '%s\n' --version plus-v2.25-r1 --replace-existing --destination /Applications/VoiceInk.app > "$fixture/expected"
+printf '%s\n' --version "$release_version" --replace-existing --destination /Applications/VoiceInk.app > "$fixture/expected"
 cmp "$fixture/actual" "$fixture/expected"
 assert_cleaned plus
 rg -q '7852619a59ba84f34e386019c55eaf8fa1ba5eeb' "$fixture/explicit/download"

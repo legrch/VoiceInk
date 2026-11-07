@@ -1,11 +1,11 @@
 #!/bin/bash
 # Install the pinned VoiceInk Plus release. Never launch the app or change Gatekeeper.
 set -euo pipefail
-VERSION=plus-v2.25-r1
+VERSION=plus-v2.25-r2
 UPSTREAM_VERSION=2.25
-BUILD_NUMBER=1001
-ASSET=VoiceInk-Plus-2.25-r1-AppleSilicon.zip
-ARCHIVE_SHA256=b4bcb2ddaf6e935e6107031991a8faae68a9aa79f6225727e12344f3b63d824d
+BUILD_NUMBER=1002
+ASSET=VoiceInk-Plus-2.25-r2-AppleSilicon.zip
+ARCHIVE_SHA256=b630705d63c143488ff6147273eeaeb2e368ebc1264e9eb2f6297dcacd95143e
 CERT_SHA256=fbb0182020b4091415f9ee73f17b156010daac2291f3f700a85ba4c5d7dbdb89
 BUNDLE_ID=com.prakashjoshipax.VoiceInk
 
@@ -32,7 +32,7 @@ main() {
                 [[ $# -ge 2 && "${2:-}" != --* && "$version_seen" == false ]] || die 'Specify --version once, with a value.'
                 requested_version=$2; version_seen=true; shift 2 ;;
             --replace-existing) replace=true; shift ;;
-            --help) echo 'Usage: bash install.sh [--version latest|plus-v2.25-r1] [--replace-existing] [--archive /path/release.zip] [--destination /path/VoiceInk.app]'; return ;;
+            --help) echo 'Usage: bash install.sh [--version latest|plus-v2.25-r2] [--replace-existing] [--archive /path/release.zip] [--destination /path/VoiceInk.app]'; return ;;
             *) die "Unknown argument: $1" ;;
         esac
     done
