@@ -78,10 +78,12 @@ struct AudioSetupView: View {
                     volumeRow("Volume During Recording") {
                         Slider(value: deviceRetainedPercent, in: 0...100, step: 1)
                             .accessibilityLabel("Volume during recording percent")
+                            .disabled(mediaController.audioOutputUID == nil)
                         TextField("", value: deviceRetainedPercent, format: .number.precision(.fractionLength(0)))
                             .frame(width: 37)
                             .multilineTextAlignment(.trailing)
                             .accessibilityLabel("Retained volume percent")
+                            .disabled(mediaController.audioOutputUID == nil)
                         Text("%").frame(width: 14)
                     }
                     duckingSeconds("Fade Duration", keyPath: \.fadeDownSeconds)
@@ -140,8 +142,7 @@ struct AudioSetupView: View {
     private var duckingEnabled: Binding<Bool> {
         Binding(get: { duckingSettings.configuration.mode == .duck }, set: { enabled in
             if enabled {
-                // Recheck before using cached UI flags: polling may have already
-                // reconciled the journal without a recording status transition.
+                // Recheck output readiness before using cached UI flags.
                 mediaController.refreshOutputVolume()
                 if mediaController.duckingQuarantined || mediaController.canAcknowledgeDuckingRecovery {
                     guard mediaController.acknowledgeDuckingRecovery(reason: .userReenabledDucking) else { return }
@@ -168,8 +169,10 @@ struct AudioSetupView: View {
 
     private var deviceRetainedPercent: Binding<Double> {
         Binding(get: { duckingSettings.configuration.retainedPercent(for: mediaController.audioOutputUID) }, set: { newValue in
+            mediaController.refreshOutputVolume()
+            guard let uid = mediaController.audioOutputUID else { return }
             var value = duckingSettings.configuration
-            value.setRetainedPercent(newValue.rounded(), for: mediaController.audioOutputUID)
+            value.setRetainedPercent(newValue.rounded(), for: uid)
             if duckingSettings.set(value) { mediaController.updateDuckingLevel(newValue) }
         })
     }

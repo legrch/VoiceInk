@@ -68,8 +68,11 @@ final class MediaController: ObservableObject {
     }
 
     func refreshOutputVolume() {
-        // Read readiness even when no status event fires: returned devices may
-        // become readable later, and the query can retire stale held evidence.
+        // Output identity and readiness may become readable after the route
+        // callback, without another status transition.
+        let identity = duckingService?.currentOutputIdentity
+        audioOutputUID = identity?.uid
+        audioOutputName = identity?.name
         duckingQuarantined = duckingService?.isQuarantined == true
         canAcknowledgeDuckingRecovery = duckingService?.canAcknowledgeRecovery == true
         let reading = duckingService?.currentVolumeReading

@@ -108,36 +108,8 @@ final class AudioDuckingService {
     private var selectedOutputBlocked: Bool {
         guard let identity = AudioDuckingCoreAudio().currentOutputIdentity() else { return false }
         guard unsettledWrites.allows(identity.uid), let journal else { return true }
-        reconcileSelectedHeldRecovery(uid: identity.uid)
         return (try? journal.isAcknowledgedDeviceBlocked(identity.uid)) != false
     }
-    /// Called on the service queue before admission (including MediaController's
-    /// pre-begin quarantine check). This path never writes hardware volume.
-    private func reconcileSelectedHeldRecovery(uid: String) {
-        guard recoveryToken == nil, !runtime.hasPendingWrite,
-              runtime.status != .active, runtime.status != .restoring,
-              unsettledWrites.allows(uid), let journal else { return }
-        let output = AudioDuckingCoreAudio()
-        let epoch = latch.currentEpoch()
-        guard let observed = output.readDefault(), observed.uid == uid else { return }
-        do {
-            let count = try journal.reconcileHeld(uid: uid, observed: observed, commit: { operation in
-                guard let current = output.readDefault(), current.hasSameControls(as: observed),
-                      current.muted == observed.muted,
-                      AudioDuckingOutputSnapshot.levelsMatch(current.values, observed.values) else { return false }
-                return try self.latch.performIfCurrent(epoch) {
-                    guard !self.runtime.hasPendingWrite, self.recoveryToken == nil,
-                          self.unsettledWrites.allows(uid) else { return false }
-                    try operation()
-                    return true
-                } ?? false
-            })
-            if count > 0 { logger.notice("Relinquished confirmed recovery on returned output; no volume write") }
-        } catch {
-            logger.warning("Returned output recovery remains blocked: journal reconciliation failed")
-        }
-    }
-
     var isQuarantined: Bool {
         queue.sync {
             retainUnsettledWrites()
