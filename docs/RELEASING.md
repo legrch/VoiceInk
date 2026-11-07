@@ -55,7 +55,7 @@ The existing upstream `scripts/release.sh` assumes `v$SHORT_VERSION` and generat
 
 - Automatic updates remain off. A future own update channel is a separate implementation and qualification decision.
 - Preserve existing data paths, settings and output-specific levels. Do not include personal settings, credentials, models, recovery journals or machine-specific key mappings in releases.
-- Install only after VoiceInk has quit; retain the old app and data backup with a rollback path. Never force-quit an active recording to deploy an update.
+- Install only after VoiceInk has quit; retain the old app and data backup with a rollback path. The owner authorizes verified local updates without another confirmation when the app is closed, or after a normal Quit when it is confirmed idle (no recording or transcription). Verify process exit before replacement. If activity is uncertain, defer replacement and ask the owner to finish. Never force-quit an active recording to deploy an update.
 - Unit/source checks, signed build, independent review, publication, installation and owner-confirmed music trials are separate evidence. Check speakers and AirPods for audio changes; do not claim unsupported outputs work.
 
 ## References
