@@ -2,7 +2,7 @@
 # Build a signed personal copy in a fresh temporary directory. Never install it.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
-identity=${VOICEINK_SIGNING_IDENTITY:-VoiceInk Local}
+identity=${VOICEINK_SIGNING_IDENTITY:-C5C6F16ED5A3D8B28CF3A4CA19638284E9190C6B}
 derived=$(mktemp -d /private/tmp/voiceink-personal-build.XXXXXX)
 python3 scripts/plus-release.py check
 Tools/AudioDuckingTests/run.sh
