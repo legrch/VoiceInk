@@ -18,9 +18,9 @@ with tempfile.TemporaryDirectory(prefix='voiceink-publish-tests-',dir='/private/
     for field,value in [('build',1003),('source_commit','2'*40),('asset','../../outside.zip'),('archive_sha256','0'*64),('revision',5)]:
         bad=manifest.copy();bad[field]=value
         try:check(bad)
-        except AssertionError:pass
+        except RuntimeError:pass
         else:raise AssertionError('Invalid publication accepted: '+field)
     try:check(manifest,commit='2'*40)
-    except AssertionError:pass
+    except RuntimeError:pass
     else:raise AssertionError('Moved tag accepted')
 print('Publish provenance, moved tag, monotonic build and archive identity checks passed; no release created')
