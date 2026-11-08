@@ -41,9 +41,10 @@ jobs:
           cp LICENSE "$VOICEINK_BUILD_OUTPUT/LICENSE"
           printf 'Source: https://github.com/legrch/VoiceInk/tree/%s\n' "$GITHUB_SHA" > "$VOICEINK_BUILD_OUTPUT/SOURCE.txt"
           ditto -c -k --sequesterRsrc --keepParent "$VOICEINK_BUILD_OUTPUT" "$RUNNER_TEMP/VoiceInk-Dev.zip"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: VoiceInk-Dev-${{ github.sha }}
           path: ${{ runner.temp }}/VoiceInk-Dev.zip
-          retention-days: 3
+          retention-days: 1
           if-no-files-found: error

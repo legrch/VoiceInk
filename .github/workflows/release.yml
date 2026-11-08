@@ -76,7 +76,7 @@ jobs:
         with:
           name: release-assets
           path: ${{ runner.temp }}/release-assets/*
-          retention-days: 3
+          retention-days: 1
           if-no-files-found: error
   publish:
     concurrency:
