@@ -3,6 +3,6 @@
   "product": "VoiceInk Plus",
   "upstream_version": "2.25",
   "upstream_commit": "228f4217445f49b667a16e91cc59a1bb1c83ad23",
-  "revision": 3,
-  "build": 1003
+  "revision": 4,
+  "build": 1004
 }
