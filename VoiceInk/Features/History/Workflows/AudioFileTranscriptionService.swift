@@ -11,9 +11,7 @@ struct AudioRetranscriptionResult {
 
 @MainActor
 class AudioTranscriptionService: ObservableObject {
-    @Published var isTranscribing = false {
-        didSet { DevSwitchActivity.shared.setHistoryBusy(ObjectIdentifier(self), isTranscribing) }
-    }
+    @Published var isTranscribing = false
     @Published var currentError: TranscriptionError?
 
     private let modelContext: ModelContext
@@ -52,6 +50,8 @@ class AudioTranscriptionService: ObservableObject {
             throw TranscriptionError.noAudioFile
         }
 
+        let devSwitchWork = DevSwitchActivity.shared.beginWork()
+        defer { DevSwitchActivity.shared.endWork(devSwitchWork) }
         await MainActor.run {
             isTranscribing = true
         }

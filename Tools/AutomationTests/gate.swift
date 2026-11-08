@@ -14,3 +14,13 @@ check(gate.nonce == second, "Old cancellation cannot cancel a new request")
 gate.cancel(second)
 check(!gate.mayQuit(recordingIdle: true, pipelineIdle: true, outputIdle: true, importsIdle: true), "Cancellation prevents late quit")
 print("Dev quit gate and stale cancellation checks passed")
+
+MainActor.assumeIsolated {
+    let activity = DevSwitchActivity.shared
+    let first = activity.beginWork(), second = activity.beginWork()
+    check(!activity.isIdle, "Unfinished work holds the app open")
+    activity.endWork(first)
+    check(!activity.isIdle, "Cancelled predecessor cannot release successor work")
+    activity.endWork(second); activity.endWork(first)
+    check(activity.isIdle, "Completion releases the final work token idempotently")
+}

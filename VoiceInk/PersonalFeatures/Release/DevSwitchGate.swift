@@ -13,12 +13,8 @@ struct DevSwitchGate {
 @MainActor
 final class DevSwitchActivity {
     static let shared = DevSwitchActivity()
-    private var restorations = Set<UUID>()
-    private var historyWork = Set<ObjectIdentifier>()
-    var isIdle: Bool { restorations.isEmpty && historyWork.isEmpty }
-    func beginRestoration() -> UUID { let id = UUID(); restorations.insert(id); return id }
-    func endRestoration(_ id: UUID) { restorations.remove(id) }
-    func setHistoryBusy(_ owner: ObjectIdentifier, _ busy: Bool) {
-        if busy { historyWork.insert(owner) } else { historyWork.remove(owner) }
-    }
+    private var pendingWork = Set<UUID>()
+    var isIdle: Bool { pendingWork.isEmpty }
+    func beginWork() -> UUID { let id = UUID(); pendingWork.insert(id); return id }
+    func endWork(_ id: UUID) { pendingWork.remove(id) }
 }
