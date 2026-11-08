@@ -6,6 +6,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/dev-backup.py scripts/de
 python3 Tools/AutomationTests/test-stamp.py
 python3 Tools/AutomationTests/test-publish.py
 python3 Tools/AutomationTests/test-session.py
+Tools/AutomationTests/test-resolver.sh
 work=$(mktemp -d /private/tmp/voiceink-automation-checks.XXXXXX)
 trap 'rm -rf "$work"' EXIT
 cp Tools/AutomationTests/gate.swift "$work/main.swift"
