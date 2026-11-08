@@ -12,6 +12,13 @@ def closed():
     if subprocess.run(['pgrep', '-x', 'VoiceInk'], stdout=subprocess.DEVNULL).returncode != 1:
         raise SystemExit('Quit VoiceInk before creating the Dev snapshot.')
 
+def sync_directory(path):
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
 def snapshot(home, check_closed):
     check_closed()
     base = home / 'Library/Application Support/VoiceInk-Personal-Backups'
@@ -63,22 +70,32 @@ def snapshot(home, check_closed):
                     value = digest(item)
                     require(value == digest(copied), 'Snapshot content mismatch')
                     checks[key] = {'sha256': value}
+                    with copied.open('rb') as stream:
+                        os.fsync(stream.fileno())
         check_closed()
         with (stage / 'VERIFIED.json').open('w') as stream:
             json.dump(checks, stream)
             stream.flush()
             os.fsync(stream.fileno())
         (stage / 'INCOMPLETE').unlink()
+        directories = [p for p in stage.rglob('*') if p.is_dir() and not p.is_symlink()]
+        for directory in sorted(directories, key=lambda p: len(p.parts), reverse=True):
+            sync_directory(directory)
+        sync_directory(stage)
         if latest.exists():
             latest.rename(previous)
+            sync_directory(base)
         try:
             stage.rename(latest)
+            sync_directory(base)
         except BaseException:
             if previous.exists() and (not latest.exists()):
                 previous.rename(latest)
+                sync_directory(base)
             raise
         if previous.exists():
             shutil.rmtree(previous)
+            sync_directory(base)
         print('Verified rolling Dev snapshot:', latest)
     finally:
         if stage.exists():
