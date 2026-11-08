@@ -1,0 +1,98 @@
+name: Release
+on:
+  push:
+    tags: ['plus-v*']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  signed-build:
+    if: github.repository == 'legrch/VoiceInk'
+    runs-on: macos-15
+    timeout-minutes: 90
+    environment: release
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate release source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          if [[ "$EVENT_NAME" == push ]]; then
+            scripts/ci/validate-tag.py "$TAG_NAME"
+          else
+            tag=$(python3 scripts/plus-release.py show | python3 -c 'import sys,json; print(json.load(sys.stdin)["tag"])')
+            scripts/ci/validate-tag.py "$tag" --dry-run
+          fi
+      - name: Select Xcode
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
+          xcodebuild -version
+          xcodebuild -downloadComponent MetalToolchain
+      - name: Tests
+        run: |
+          Tools/AudioDuckingTests/run.sh
+          Tools/PlusReleaseTests/run.sh
+          Tools/AutomationTests/run.sh
+          Tools/ReleaseInstallTests/test-bootstrap.sh
+      - name: Prepare pinned Whisper
+        run: scripts/ci/prepare-whisper.sh
+      - name: Import signing identity
+        env:
+          VOICEINK_P12_BASE64: ${{ secrets.VOICEINK_P12_BASE64 }}
+          VOICEINK_P12_PASSWORD: ${{ secrets.VOICEINK_P12_PASSWORD }}
+        run: scripts/ci/signing.sh
+      - name: Build, package and verify release
+        env:
+          VOICEINK_SIGNING_IDENTITY: C5C6F16ED5A3D8B28CF3A4CA19638284E9190C6B
+          VOICEINK_DERIVED_DATA: ${{ runner.temp }}/voiceink-derived
+          VOICEINK_BUILD_OUTPUT: ${{ runner.temp }}/voiceink-release
+        run: |
+          scripts/build-app.sh release
+          python3 scripts/plus-release.py package --app "$VOICEINK_BUILD_OUTPUT/VoiceInk.app" --output "$RUNNER_TEMP/release-assets"
+          archive=$(find "$RUNNER_TEMP/release-assets" -maxdepth 1 -name '*.zip' -print)
+          Tools/AutomationTests/test-signed-install.sh "$archive" "$RUNNER_TEMP/release-assets/release.json"
+          Tools/PersonalInstallTests/test-real-bundle-rollback.sh "$VOICEINK_BUILD_OUTPUT/VoiceInk.app"
+          cp scripts/install.sh "$RUNNER_TEMP/release-assets/install.sh"
+          (cd "$RUNNER_TEMP/release-assets" && shasum -a 256 ./* > SHA256SUMS)
+      - name: Remove signing identity
+        if: always()
+        run: scripts/ci/signing.sh cleanup
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-assets
+          path: ${{ runner.temp }}/release-assets/*
+          retention-days: 3
+          if-no-files-found: error
+  publish:
+    concurrency:
+      group: voiceink-publish
+      cancel-in-progress: false
+    if: github.event_name == 'push' && github.repository == 'legrch/VoiceInk'
+    needs: signed-build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-assets
+          path: release-assets
+      - name: Publish immutable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: legrch/VoiceInk
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          python3 scripts/ci/publish-release.py release-assets "$TAG_NAME" "$GITHUB_SHA"

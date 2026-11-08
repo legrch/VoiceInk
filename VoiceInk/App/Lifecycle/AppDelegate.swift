@@ -4,6 +4,25 @@ import UniformTypeIdentifiers
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     weak var menuBarManager: MenuBarManager?
+    private var devSwitch: DevSwitchCoordinator?
+
+    @MainActor
+    func configureDevSwitch(engine: VoiceInkEngine) {
+        devSwitch = DevSwitchCoordinator { [weak engine] in
+            guard let engine else { return false }
+            return engine.recordingState == .idle && !engine.isRecordingStartBlocked
+                && engine.activeRecordingStartID == nil
+                && !AudioDeviceManager.shared.isRecordingActive
+                && !AudioTranscriptionManager.shared.isProcessingQueue
+                && DevSwitchActivity.shared.isIdle
+        }
+    }
+
+    @MainActor
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        devSwitch?.terminationAllowed == false ? .terminateCancel : .terminateNow
+    }
+
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         menuBarManager?.applyActivationPolicy()

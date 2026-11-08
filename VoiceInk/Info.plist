@@ -58,5 +58,7 @@
 	<string>plus-v2.25-r3</string>
 	<key>VoiceInkUpstreamCommit</key>
 	<string>228f4217445f49b667a16e91cc59a1bb1c83ad23</string>
+	<key>VoiceInkDevSwitchProtocol</key>
+	<integer>1</integer>
 </dict>
 </plist>

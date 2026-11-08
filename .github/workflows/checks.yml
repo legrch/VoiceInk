@@ -1,0 +1,48 @@
+name: Checks
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  macos-build:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select Xcode
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
+          xcodebuild -version
+          xcodebuild -downloadComponent MetalToolchain
+      - name: Tests
+        run: |
+          Tools/AudioDuckingTests/run.sh
+          Tools/PlusReleaseTests/run.sh
+          Tools/AutomationTests/run.sh
+          Tools/ReleaseInstallTests/test-bootstrap.sh
+      - name: Prepare pinned Whisper
+        run: scripts/ci/prepare-whisper.sh
+      - name: Build development artifact without release credentials
+        env:
+          VOICEINK_DERIVED_DATA: ${{ runner.temp }}/voiceink-derived
+          VOICEINK_BUILD_OUTPUT: ${{ runner.temp }}/VoiceInk-Dev
+        run: |
+          scripts/build-app.sh ci
+          cp LICENSE "$VOICEINK_BUILD_OUTPUT/LICENSE"
+          printf 'Source: https://github.com/legrch/VoiceInk/tree/%s\n' "$GITHUB_SHA" > "$VOICEINK_BUILD_OUTPUT/SOURCE.txt"
+          ditto -c -k --sequesterRsrc --keepParent "$VOICEINK_BUILD_OUTPUT" "$RUNNER_TEMP/VoiceInk-Dev.zip"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: VoiceInk-Dev-${{ github.sha }}
+          path: ${{ runner.temp }}/VoiceInk-Dev.zip
+          retention-days: 3
+          if-no-files-found: error

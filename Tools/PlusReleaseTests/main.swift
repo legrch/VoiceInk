@@ -21,3 +21,9 @@ patch["CFBundleShortVersionString"] = "2.25.1"
 patch["VoiceInkPlusTag"] = "plus-v2.25.1-r\(revision)"
 check(PlusReleaseMetadata(info: patch)?.upstreamVersion == "2.25.1", "Retain full upstream patch version")
 print("Plus release identity, provenance and invalid-metadata checks passed")
+
+var development = info
+development["VoiceInkDevDescription"] = "plus-v2.25-r3-2-gabcdef0"
+check(PlusReleaseMetadata(info: development)?.displayVersion.contains("Dev plus-v2.25-r3-2-gabcdef0") == true, "Development provenance is visible")
+development["VoiceInkDevDescription"] = "bad\nvalue"
+check(PlusReleaseMetadata(info: development) == nil, "Malformed development provenance is rejected")

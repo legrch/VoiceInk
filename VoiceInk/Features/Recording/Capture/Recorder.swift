@@ -129,7 +129,9 @@ class Recorder: NSObject, ObservableObject {
         resetAudioMeter()
 
         audioRestorationTask?.cancel()
+        let devSwitchActivity = DevSwitchActivity.shared.beginRestoration()
         audioRestorationTask = Task {
+            defer { DevSwitchActivity.shared.endRestoration(devSwitchActivity) }
             if let playbackSessionID {
                 async let output: Void = mediaController.unmuteSystemAudio(sessionID: playbackSessionID)
                 async let playback: Void = playbackController.resumeMedia(sessionID: playbackSessionID)

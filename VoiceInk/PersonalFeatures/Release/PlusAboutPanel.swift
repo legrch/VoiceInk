@@ -17,7 +17,7 @@ enum PlusAboutPanel {
             credits.addAttribute(.link, value: url, range: (text as NSString).range(of: label))
         }
         NSApplication.shared.orderFrontStandardAboutPanel(options: [
-            .applicationName: PlusReleaseMetadata.product,
+            .applicationName: release.developmentDescription == nil ? PlusReleaseMetadata.product : "VoiceInk Plus Dev",
             .applicationVersion: release.displayVersion,
             .version: release.build,
             .credits: credits

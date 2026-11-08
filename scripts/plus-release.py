@@ -88,7 +88,8 @@ def main():
         print(f"Verified {m['product']} {m['tag']} (build {m['build']})"); return
     if a.operation == "package":
         assert a.app and a.output and a.app.is_dir(), "Pass --app and --output directory"
-        check_info(a.app / "Contents/Info.plist", m)
+        app_info = check_info(a.app / "Contents/Info.plist", m)
+        assert "VoiceInkDevDescription" not in app_info, "Refusing to package a development app"
         subprocess.run(["codesign", "--verify", "--deep", "--strict", str(a.app)], check=True)
         a.output.mkdir(parents=True, exist_ok=True)
         archive = a.output / m["asset"]
@@ -99,7 +100,14 @@ def main():
             shutil.copy2(ROOT / "LICENSE", folder / "LICENSE")
             (folder / "SOURCE.txt").write_text(f"Source and build instructions: https://github.com/legrch/VoiceInk/tree/{m['tag']}\nUpstream: {m['upstream_commit']}\n")
             subprocess.run(["ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", str(folder), str(archive.resolve())], check=True)
-        print(f"{hashlib.sha256(archive.read_bytes()).hexdigest()}  {archive.name}"); return
+        checksum = hashlib.sha256(archive.read_bytes()).hexdigest()
+        manifest = {key: m[key] for key in ("schema", "upstream_version", "revision", "build", "tag", "asset")}
+        manifest["archive_sha256"] = checksum
+        if "VoiceInkSourceCommit" in app_info:
+            assert re.fullmatch(r"[a-f0-9]{40}", app_info["VoiceInkSourceCommit"]), "Invalid app source identity"
+            manifest["source_commit"] = app_info["VoiceInkSourceCommit"]
+        (a.output / "release.json").write_text(json.dumps(manifest, indent=2) + "\n")
+        print(f"{checksum}  {archive.name}"); return
     if a.operation == "pin-installer":
         assert a.archive and a.archive.name == m["asset"], "Expected current release archive"
         digest = hashlib.sha256(a.archive.read_bytes()).hexdigest()

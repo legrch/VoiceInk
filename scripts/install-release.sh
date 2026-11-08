@@ -8,15 +8,16 @@ umask 077
 
 bootstrap_fail() { printf 'Error: %s\n' "$*" >&2; exit 1; }
 bootstrap_usage() {
-    printf '%s\n' 'Usage: install-release.sh [latest|plus-v2.25-r3|personal-2.25.1] [--destination /path/VoiceInk.app]'
+    printf '%s\n' 'Usage: install-release.sh [latest|plus-vVERSION-rN|personal-2.25.1] [--destination /path/VoiceInk.app]'
 }
 install_release() {
     selected=${1-latest}
     [ "$#" -eq 0 ] || shift
     case "$selected" in
         --help|-h) [ "$#" -eq 0 ] || bootstrap_fail 'Unexpected arguments'; bootstrap_usage; return ;;
-        latest|plus-v2.25-r3|personal-2.25.1) ;;
-        *) bootstrap_fail 'Unknown version. Use latest, plus-v2.25-r3 or personal-2.25.1.' ;;
+        latest|personal-2.25.1) ;;
+        plus-v*) printf '%s\n' "$selected" | /usr/bin/grep -Eq '^plus-v[0-9]+\.[0-9]+(\.[0-9]+)?-r[1-9][0-9]*$' || bootstrap_fail 'Invalid release tag.' ;;
+        *) bootstrap_fail 'Unknown version. Use latest, plus-vVERSION-rN or personal-2.25.1.' ;;
     esac
     destination=/Applications/VoiceInk.app
     destination_seen=false

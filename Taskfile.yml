@@ -1,0 +1,18 @@
+version: '3'
+tasks:
+  dev:
+    desc: Build Dev, wait for stable VoiceInk to become idle, test Dev, then reopen stable
+    cmds: [scripts/dev.sh run]
+  dev:build:
+    desc: Build a signed Dev app without launch or installation
+    cmds: [scripts/dev.sh build]
+  check:
+    desc: Run audio, release metadata and automation checks
+    cmds:
+      - Tools/AudioDuckingTests/run.sh
+      - Tools/PlusReleaseTests/run.sh
+      - Tools/AutomationTests/run.sh
+      - Tools/ReleaseInstallTests/test-bootstrap.sh
+  release:
+    desc: Push the manifest tag from verified main and let GitHub Actions build/publish
+    cmds: [python3 scripts/release-tag.py]
