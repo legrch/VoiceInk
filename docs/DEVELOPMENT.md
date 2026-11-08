@@ -13,6 +13,8 @@ task dev
 
 This builds first, without disturbing the running app. It then requests an app-owned idle quit: VoiceInk waits for recording, transcription, import work, output delivery/clipboard cleanup and audio restoration to finish. The launcher verifies the process has exited, creates one verified rolling profile snapshot, opens the signed Dev candidate and waits for it to close. After Dev exits, it reopens stable. It never force-quits an app or replaces `/Applications/VoiceInk.app`.
 
+Finish the work already in progress and let handover complete before starting another shortcut action. An event queued by the global shortcut worker exactly at shutdown can require another invocation. Custom commands retain their existing subprocess-cleanup contract; the launcher does not isolate detached descendants.
+
 Both apps show their upstream/fork version in About; Dev also shows `git describe`, including distance from the last Plus tag, abbreviated commit and a dirty marker when applicable. The bundle identifier and signing certificate stay the same, retaining permissions. Do not open another copy manually while testing Dev.
 
 The installed r3 predates the idle-switch protocol. Close it once with Command-Q before the first test; after stable is upgraded to a protocol-aware build, subsequent `task dev` sessions switch automatically. Unsupported old copies are never guessed idle from microphone activity. The wait is bounded to twenty minutes. Interrupting or timing out the waiting launcher cancels its request; a dead requester cannot leave a deferred quit armed. Concurrent launchers are refused by a shared-profile session lock.
@@ -42,6 +44,8 @@ scripts/configure-ci-signing.sh --upload
 The helper first creates a release environment requiring approval by legrch, or verifies those protections on an existing environment without replacing its rules. GitHub must confirm this policy before any key export. Each signed run requires the owner to approve its exact ref in Actions; no unreviewed branch receives the key merely by dispatching a workflow.
 
 This selects only the existing VoiceInk certificate by its fixed SHA-256, exports that identity with a random password in memory, and uses the signed-in GitHub CLI to upload the two secrets to `legrch/VoiceInk` environment `release` on github.com. macOS may request Keychain authorization. It does not export every identity, print key material or write a P12 into the checkout. Do not invoke it without the owner's explicit approval. If setup fails partway, inspect the two named secrets before another attempt; a partial pair is not a successful setup.
+
+The final app is re-signed with hardened runtime explicitly enabled, and the final CodeDirectory flags are checked before packaging. Existing release environments are matched case-insensitively and their protection rules are preserved.
 
 Package resolution runs before key import, stays pinned to Package.resolved and retries only a known transient connection or HTTP 502/503/504 error (at most three attempts). Permission/auth/checksum failures are not retried. A runner imports the identity into a temporary keychain, verifies the fixed certificate fingerprint and removes the keychain afterward. Only release builds receive it. A manual **Release → Run workflow** on `main` is a signed packaging/install/rollback dry run and never publishes, uploads a release artifact or changes an installed app.
 
