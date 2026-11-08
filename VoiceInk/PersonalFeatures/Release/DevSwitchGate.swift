@@ -15,6 +15,15 @@ final class DevSwitchActivity {
     static let shared = DevSwitchActivity()
     private var pendingWork = Set<UUID>()
     var isIdle: Bool { pendingWork.isEmpty }
+    /// Acquire before scheduling; retain ownership through every awaited cleanup.
+    @discardableResult
+    func track(_ operation: @escaping @MainActor () async -> Void) -> Task<Void, Never> {
+        let token = beginWork()
+        return Task { @MainActor in
+            defer { self.endWork(token) }
+            await operation()
+        }
+    }
     func beginWork() -> UUID { let id = UUID(); pendingWork.insert(id); return id }
     func endWork(_ id: UUID) { pendingWork.remove(id) }
 }

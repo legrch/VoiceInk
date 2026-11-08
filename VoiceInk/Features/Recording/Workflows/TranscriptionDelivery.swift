@@ -104,7 +104,7 @@ final class TranscriptionDelivery {
         SoundManager.shared.playStopSound()
         await actions.dismiss()
 
-        Task {
+        DevSwitchActivity.shared.track {
             await runCustomCommand(command: command, commandText: commandText, finishAndSendKey: finishAndSendKey)
         }
     }
@@ -174,7 +174,7 @@ final class TranscriptionDelivery {
 
         let pasteTask = CursorPaster.startPasteAtCursor(pastedText, sendKey: sendKey)
 
-        Task { @MainActor in
+        DevSwitchActivity.shared.track {
             let pasteOutcome = await pasteTask.value
 
             if sendKey.isEnabled && pasteOutcome.result.didPostPasteCommand {

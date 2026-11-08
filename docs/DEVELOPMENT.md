@@ -11,7 +11,7 @@ task dev
 # task d is an alias
 ```
 
-This builds first, without disturbing the running app. It then requests an app-owned idle quit: VoiceInk waits for recording, transcription, import work and audio restoration to finish. The launcher verifies the process has exited, creates one verified rolling profile snapshot, opens the signed Dev candidate and waits for it to close. After Dev exits, it reopens stable. It never force-quits an app or replaces `/Applications/VoiceInk.app`.
+This builds first, without disturbing the running app. It then requests an app-owned idle quit: VoiceInk waits for recording, transcription, import work, output delivery/clipboard cleanup and audio restoration to finish. The launcher verifies the process has exited, creates one verified rolling profile snapshot, opens the signed Dev candidate and waits for it to close. After Dev exits, it reopens stable. It never force-quits an app or replaces `/Applications/VoiceInk.app`.
 
 Both apps show their upstream/fork version in About; Dev also shows `git describe`, including distance from the last Plus tag, abbreviated commit and a dirty marker when applicable. The bundle identifier and signing certificate stay the same, retaining permissions. Do not open another copy manually while testing Dev.
 

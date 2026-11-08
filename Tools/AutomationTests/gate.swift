@@ -24,3 +24,25 @@ MainActor.assumeIsolated {
     activity.endWork(second); activity.endWork(first)
     check(activity.isIdle, "Completion releases the final work token idempotently")
 }
+
+// Exercise the production task owner with a suspended delivery and independent cleanup.
+let (delivery, finishDelivery) = AsyncStream<Void>.makeStream()
+let (cleanup, finishCleanup) = AsyncStream<Void>.makeStream()
+let work = await MainActor.run {
+    let activity = DevSwitchActivity.shared
+    let work = activity.track {
+        for await _ in delivery { break }
+        for await _ in cleanup { break }
+    }
+    check(!activity.isIdle, "Delivery owns a token before its task is scheduled")
+    return work
+}
+finishDelivery.finish()
+await Task.yield()
+await MainActor.run { check(!DevSwitchActivity.shared.isIdle, "Completed delivery cannot release pending clipboard cleanup") }
+work.cancel()
+// AsyncStream cancellation finishes iteration; the operation then completes its defer.
+finishCleanup.finish()
+await work.value
+await MainActor.run { check(DevSwitchActivity.shared.isIdle, "Only terminal cleanup releases the app switch") }
+print("Tracked delivery/cleanup lifetime and cancellation passed")
