@@ -1,3 +1,4 @@
+import importlib.util
 import json,plistlib,subprocess,tempfile
 from pathlib import Path
 base=plistlib.loads(Path('VoiceInk/Info.plist').read_bytes());base['CFBundleIdentifier']='com.prakashjoshipax.VoiceInk'
