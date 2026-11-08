@@ -33,6 +33,10 @@ jobs:
           Tools/ReleaseInstallTests/test-bootstrap.sh
       - name: Prepare pinned Whisper
         run: scripts/ci/prepare-whisper.sh
+      - name: Resolve pinned packages
+        env:
+          VOICEINK_DERIVED_DATA: ${{ runner.temp }}/voiceink-derived
+        run: scripts/ci/resolve-packages.sh
       - name: Build development artifact without release credentials
         env:
           VOICEINK_DERIVED_DATA: ${{ runner.temp }}/voiceink-derived

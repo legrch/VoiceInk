@@ -52,6 +52,10 @@ jobs:
           Tools/ReleaseInstallTests/test-bootstrap.sh
       - name: Prepare pinned Whisper
         run: scripts/ci/prepare-whisper.sh
+      - name: Resolve pinned packages
+        env:
+          VOICEINK_DERIVED_DATA: ${{ runner.temp }}/voiceink-derived
+        run: scripts/ci/resolve-packages.sh
       - name: Import signing identity
         env:
           VOICEINK_P12_BASE64: ${{ secrets.VOICEINK_P12_BASE64 }}
@@ -61,7 +65,7 @@ jobs:
         env:
           VOICEINK_SIGNING_IDENTITY: C5C6F16ED5A3D8B28CF3A4CA19638284E9190C6B
           VOICEINK_DERIVED_DATA: ${{ runner.temp }}/voiceink-derived
-          VOICEINK_BUILD_OUTPUT: ${{ runner.temp }}/voiceink-release
+          VOICEINK_BUILD_OUTPUT: /private/tmp/voiceink-ci-release-app
         run: |
           scripts/build-app.sh release
           python3 scripts/plus-release.py package --app "$VOICEINK_BUILD_OUTPUT/VoiceInk.app" --output "$RUNNER_TEMP/release-assets"

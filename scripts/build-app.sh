@@ -21,7 +21,7 @@ xcodebuild -project VoiceInk.xcodeproj -scheme VoiceInk -configuration Release \
   CODE_SIGN_IDENTITY="$identity" CODE_SIGNING_REQUIRED=YES CODE_SIGNING_ALLOWED=YES DEVELOPMENT_TEAM='' \
   CODE_SIGN_ENTITLEMENTS="$PWD/VoiceInk/VoiceInk.local.entitlements" \
   'SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) LOCAL_BUILD' \
-  -skipPackagePluginValidation -skipMacroValidation build
+  -onlyUsePackageVersionsFromResolvedFile -skipPackagePluginValidation -skipMacroValidation build
 mkdir -p "$output"
 [[ ! -e "$output/VoiceInk.app" ]] || { echo 'Build output already exists; choose a fresh VOICEINK_BUILD_OUTPUT.' >&2; exit 1; }
 ditto "$derived/Build/Products/Release/VoiceInk.app" "$output/VoiceInk.app"

@@ -1,6 +1,7 @@
 version: '3'
 tasks:
   dev:
+    aliases: [d]
     desc: Build Dev, wait for stable VoiceInk to become idle, test Dev, then reopen stable
     cmds: [scripts/dev.sh run]
   dev:build:
