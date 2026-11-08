@@ -8,6 +8,32 @@ guard CommandLine.arguments == [CommandLine.arguments[0], "--upload"] else {
     exit(0)
 }
 func fail(_ message: String) -> Never { fputs(message + "\n", stderr); exit(1) }
+@discardableResult
+func run(_ arguments: [String], input: Data? = nil, capture: Bool = false) -> Data {
+    let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    process.arguments = ["gh"] + arguments
+    var environment = ProcessInfo.processInfo.environment
+    environment["GH_HOST"] = "github.com"
+    environment.removeValue(forKey: "GH_DEBUG")
+    process.environment = environment
+    let pipe = Pipe(); if input != nil { process.standardInput = pipe }
+    let output = Pipe(); if capture { process.standardOutput = output }
+    var result = Data()
+    do {
+        try process.run()
+        if let input { try pipe.fileHandleForWriting.write(contentsOf: input); try pipe.fileHandleForWriting.close() }
+        if capture { result = output.fileHandleForReading.readDataToEndOfFile() }
+        process.waitUntilExit()
+    } catch { fail("GitHub secret setup failed. Secret values were not printed.") }
+    guard process.terminationStatus == 0 else { fail("GitHub rejected secret setup; inspect the named environment before retrying.") }
+    return result
+}
+run(["api", "repos/legrch/VoiceInk/environments/release", "--method", "PUT"], capture: true)
+let inventory = run(["secret", "list", "--repo", "legrch/VoiceInk", "--env", "release", "--json", "name"], capture: true)
+guard let entries = try? JSONSerialization.jsonObject(with: inventory) as? [[String: Any]],
+      !entries.contains(where: { ["VOICEINK_P12_BASE64", "VOICEINK_P12_PASSWORD"].contains($0["name"] as? String ?? "") }) else {
+    fail("Signing secrets already exist or setup is partial. Inspect the two named entries; this helper never rotates or overwrites them blindly.")
+}
 let expected = "fbb0182020b4091415f9ee73f17b156010daac2291f3f700a85ba4c5d7dbdb89"
 var matches: CFTypeRef?
 let query: [CFString: Any] = [kSecClass: kSecClassIdentity, kSecReturnRef: true, kSecMatchLimit: kSecMatchLimitAll]
@@ -31,21 +57,6 @@ var exported: CFData?
 let exportStatus = withExtendedLifetime(passphrase) { SecItemExport(selected[0], .formatPKCS12, SecItemImportExportFlags(), &parameters, &exported) }
 guard exportStatus == errSecSuccess,
       let exported else { fail("The selected identity could not be exported. No signing secret was uploaded.") }
-func run(_ arguments: [String], input: Data? = nil) {
-    let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-    process.arguments = ["gh"] + arguments
-    var environment = ProcessInfo.processInfo.environment
-    environment["GH_HOST"] = "github.com"
-    process.environment = environment
-    let pipe = Pipe(); if input != nil { process.standardInput = pipe }
-    do {
-        try process.run()
-        if let input { try pipe.fileHandleForWriting.write(contentsOf: input); try pipe.fileHandleForWriting.close() }
-        process.waitUntilExit()
-    } catch { fail("GitHub secret setup failed. Secret values were not printed.") }
-    guard process.terminationStatus == 0 else { fail("GitHub rejected secret setup; inspect the named environment before retrying.") }
-}
-run(["api", "repos/legrch/VoiceInk/environments/release", "--method", "PUT"], input: nil)
 run(["secret", "set", "VOICEINK_P12_PASSWORD", "--repo", "legrch/VoiceInk", "--env", "release"], input: Data(password.utf8))
 run(["secret", "set", "VOICEINK_P12_BASE64", "--repo", "legrch/VoiceInk", "--env", "release"], input: Data((exported as Data).base64EncodedString().utf8))
 print("Configured the two signing secrets in legrch/VoiceInk environment release. Key material stayed in memory and was never written to the checkout or printed.")
