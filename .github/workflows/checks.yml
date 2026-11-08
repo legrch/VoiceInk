@@ -25,6 +25,7 @@ jobs:
           xcodebuild -downloadComponent MetalToolchain
       - name: Tests
         run: |
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 -shellcheck= -pyflakes= .github/workflows/*.yml
           Tools/AudioDuckingTests/run.sh
           Tools/PlusReleaseTests/run.sh
           Tools/AutomationTests/run.sh

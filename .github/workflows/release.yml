@@ -31,6 +31,12 @@ jobs:
             tag=$(python3 scripts/plus-release.py show | python3 -c 'import sys,json; print(json.load(sys.stdin)["tag"])')
             scripts/ci/validate-tag.py "$tag" --dry-run
           fi
+      - name: Check signing configuration
+        env:
+          VOICEINK_P12_BASE64: ${{ secrets.VOICEINK_P12_BASE64 }}
+          VOICEINK_P12_PASSWORD: ${{ secrets.VOICEINK_P12_PASSWORD }}
+        run: |
+          [[ -n "$VOICEINK_P12_BASE64" && -n "$VOICEINK_P12_PASSWORD" ]] || { echo 'Configure the two release signing secrets before running this workflow.' >&2; exit 1; }
       - name: Select Xcode
         run: |
           sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
@@ -38,6 +44,7 @@ jobs:
           xcodebuild -downloadComponent MetalToolchain
       - name: Tests
         run: |
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 -shellcheck= -pyflakes= .github/workflows/*.yml
           Tools/AudioDuckingTests/run.sh
           Tools/PlusReleaseTests/run.sh
           Tools/AutomationTests/run.sh

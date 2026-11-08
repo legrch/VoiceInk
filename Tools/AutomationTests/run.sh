@@ -3,6 +3,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 for script in scripts/build-app.sh scripts/dev.sh scripts/configure-ci-signing.sh scripts/install.sh scripts/install-release.sh scripts/ci/*.sh; do bash -n "$script"; done
 PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/dev-backup.py scripts/dev-session.py scripts/ci/validate-tag.py scripts/ci/publish-release.py
+python3 Tools/AutomationTests/test-stamp.py
 python3 Tools/AutomationTests/test-publish.py
 python3 Tools/AutomationTests/test-session.py
 work=$(mktemp -d /private/tmp/voiceink-automation-checks.XXXXXX)

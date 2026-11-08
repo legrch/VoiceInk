@@ -25,13 +25,8 @@ mkdir -p "$output"
 [[ ! -e "$output/VoiceInk.app" ]] || { echo 'Build output already exists; choose a fresh VOICEINK_BUILD_OUTPUT.' >&2; exit 1; }
 ditto "$derived/Build/Products/Release/VoiceInk.app" "$output/VoiceInk.app"
 source_commit=$(git rev-parse HEAD)
-/usr/libexec/PlistBuddy -c "Add :VoiceInkSourceCommit string $source_commit" "$output/VoiceInk.app/Contents/Info.plist"
-if [[ "$mode" != release ]]; then
-  description=$(git describe --tags --match 'plus-v*' --long --always --dirty)
-  /usr/libexec/PlistBuddy -c "Add :VoiceInkDevDescription string $description" "$output/VoiceInk.app/Contents/Info.plist"
-  /usr/libexec/PlistBuddy -c 'Add :CFBundleDisplayName string VoiceInk Dev' "$output/VoiceInk.app/Contents/Info.plist"
-  /usr/libexec/PlistBuddy -c 'Set :CFBundleName VoiceInk Dev' "$output/VoiceInk.app/Contents/Info.plist"
-fi
+description=$(git describe --tags --match 'plus-v*' --long --always --dirty)
+python3 scripts/stamp-build.py "$output/VoiceInk.app" "$mode" "$source_commit" "$description"
 codesign --force --sign "$identity" --entitlements VoiceInk/VoiceInk.local.entitlements "$output/VoiceInk.app"
 codesign --verify --deep --strict "$output/VoiceInk.app"
 python3 scripts/plus-release.py check --app "$output/VoiceInk.app"
