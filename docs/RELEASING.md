@@ -17,8 +17,8 @@ Keep the full upstream version and our release revision separate. Do not reserve
 | 2.25 | 1 | VoiceInk Plus 2.25 · r1 | `plus-v2.25-r1` | 1001 |
 | 2.25 | 2 | VoiceInk Plus 2.25 · r2 | `plus-v2.25-r2` | 1002 |
 | 2.25 | 3 | VoiceInk Plus 2.25 · r3 | `plus-v2.25-r3` | 1003 |
-| 2.25.1 | 1 | VoiceInk Plus 2.25.1 · r1 | `plus-v2.25.1-r1` | 1003 |
-| 2.26 | 1 | VoiceInk Plus 2.26 · r1 | `plus-v2.26-r1` | 1004 |
+| 2.25.1 | 1 | VoiceInk Plus 2.25.1 · r1 | `plus-v2.25.1-r1` | 1004 |
+| 2.26 | 1 | VoiceInk Plus 2.26 · r1 | `plus-v2.26-r1` | 1005 |
 
 - Preserve the upstream version exactly as provenance, including any patch component. Increment `rN` for each published Plus release on that base; start at `r1` when the upstream version changes.
 - Use an independent, strictly increasing numeric `CFBundleVersion`. Choose its initial value above the installed and published builds. The first Plus release allocates build 1001; choose a higher build for every later published release. Never reset this counter on a new upstream base or derive update order from `rN` alone.
@@ -27,18 +27,13 @@ Keep the full upstream version and our release revision separate. Do not reserve
 
 ## Preparing a Plus release
 
-`release/plus.json` is the release identity source: exact upstream version/commit, fork revision and independent build. The main app's version and Plus keys in `VoiceInk/Info.plist` are generated from it; helper targets keep their own version/build. About and diagnostics read those signed bundle keys. Keep the application filename, bundle ID, signing certificate and installation path unchanged.
+Follow [Development and automated releases](DEVELOPMENT.md). After a tested/reviewed manifest change is merged to `main` and its macOS check passes, `task release` pushes the new annotated tag. GitHub Actions builds, signs, verifies installation/rollback and publishes the release. The release environment must first be configured with the explicitly approved existing signing identity.
 
-1. Edit `release/plus.json`, incrementing the numeric build for every published release, then run `python3 scripts/plus-release.py sync-info` and `Tools/PlusReleaseTests/run.sh`.
-2. Run audio checks and a signed Release build with `LOCAL_BUILD` and `LocalBuild.xcconfig`. `scripts/personal-build.sh` validates metadata before and after building, without installation. For an established reusable DerivedData lane, keep the same arguments and call `python3 scripts/plus-release.py check --app /path/VoiceInk.app` after build.
-3. Package once into a fresh directory: `python3 scripts/plus-release.py package --app /path/VoiceInk.app --output /private/tmp/plus-assets`. It derives the tag/asset name, checks the bundle/signature and includes GPL/source pointers. It refuses to overwrite an archive.
-4. Run `python3 scripts/plus-release.py pin-installer --archive /private/tmp/plus-assets/VoiceInk-Plus-2.25-r3-AppleSilicon.zip`. Commit the installer and app changes, then run `python3 scripts/plus-release.py pin-bootstrap --commit FULL_INSTALLER_COMMIT` and commit the bootstrap. The immutable installer pins archive bytes; the bootstrap pins installer bytes and retains the legacy exact-version route.
-5. Run audio/metadata/bootstrap tests, real signed archive install/update/rollback fixtures and a composed build. Freeze the complete candidate, close the risk-selected review and merge through a reviewed merge commit with required checks green.
-6. Copy the committed `scripts/install.sh` into the release assets as `install.sh`; generate `SHA256SUMS` for it and the app archive. Publish the derived tag/title on the accepted source; keep old tags/assets immutable. Verify downloaded assets and the public one-command bootstrap in an isolated destination before announcing availability. App identity changes require a fresh signed build and new archive/pins.
+`release/plus.json` remains the identity source. `scripts/plus-release.py sync-info` generates main-app settings; helpers retain upstream identity. The published JSON manifest describes the ZIP's exact hash and signed app/source identity. Stable installer code remains pinned independently of per-release data.
 
-The installer validates archive hash, app signature/certificate, bundle ID, upstream version, build, Plus tag and updater isolation before replacement. It does not configure accounts, grant permissions, launch the app or install audio drivers. New-release alerts use GitHub's Releases watch subscription; the in-app link opens the public latest-release page.
+The old `pin-installer` operation is retained only for reproducing historical manually pinned releases. Do not use it for automated releases: the CI manifest carries the archive checksum. `pin-bootstrap --commit` is needed only when installer code itself changes, and must point at its committed exact payload.
 
-The existing upstream `scripts/release.sh` assumes `v$SHORT_VERSION` and generates Sparkle metadata. Do not use it for Plus releases.
+The existing upstream `scripts/release.sh` assumes upstream tags and Sparkle metadata. Do not use it for Plus releases. Package/signature, runtime behavior and owner approval remain separate delivery boundaries.
 
 ## Upstream integration
 

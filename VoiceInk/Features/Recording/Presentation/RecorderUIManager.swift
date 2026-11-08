@@ -99,7 +99,7 @@ class RecorderUIManager: ObservableObject, RecorderPanelPresenting {
                     recorder: recorder,
                     assistantSession: engine.assistantSession,
                     onRecordButtonTapped: { [weak self] in
-                        Task { @MainActor in
+                        DevSwitchActivity.shared.track {
                             await self?.toggleRecorderPanel()
                         }
                     },
@@ -109,7 +109,7 @@ class RecorderUIManager: ObservableObject, RecorderPanelPresenting {
                         }
                     },
                     onAssistantFollowUp: { [weak engine] text in
-                        Task { @MainActor in
+                        DevSwitchActivity.shared.track {
                             await engine?.sendAssistantFollowUp(text)
                         }
                     }
@@ -123,7 +123,7 @@ class RecorderUIManager: ObservableObject, RecorderPanelPresenting {
                     recorder: recorder,
                     assistantSession: engine.assistantSession,
                     onRecordButtonTapped: { [weak self] in
-                        Task { @MainActor in
+                        DevSwitchActivity.shared.track {
                             await self?.toggleRecorderPanel()
                         }
                     },
@@ -133,7 +133,7 @@ class RecorderUIManager: ObservableObject, RecorderPanelPresenting {
                         }
                     },
                     onAssistantFollowUp: { [weak engine] text in
-                        Task { @MainActor in
+                        DevSwitchActivity.shared.track {
                             await engine?.sendAssistantFollowUp(text)
                         }
                     }
@@ -360,8 +360,8 @@ class RecorderUIManager: ObservableObject, RecorderPanelPresenting {
     }
 
     @objc public func handleToggleRecorderPanelNotification() {
-        Task {
-            await toggleRecorderPanel()
+        DevSwitchActivity.shared.track { [weak self] in
+            await self?.toggleRecorderPanel()
         }
     }
 

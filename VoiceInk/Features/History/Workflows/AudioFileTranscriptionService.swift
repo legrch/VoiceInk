@@ -50,6 +50,8 @@ class AudioTranscriptionService: ObservableObject {
             throw TranscriptionError.noAudioFile
         }
 
+        let devSwitchWork = DevSwitchActivity.shared.beginWork()
+        defer { DevSwitchActivity.shared.endWork(devSwitchWork) }
         await MainActor.run {
             isTranscribing = true
         }

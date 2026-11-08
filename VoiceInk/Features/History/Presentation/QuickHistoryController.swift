@@ -151,12 +151,10 @@ final class QuickHistoryController: NSObject {
         let text = transcription.preferredHistoryText
         let targetApplication = resolvedTargetApplication() ?? targetApplication
         self.targetApplication = nil
+        CursorPaster.schedulePasteAtCursor(text, afterNanoseconds: 120_000_000)
         dismiss()
 
         targetApplication?.activate(options: [.activateIgnoringOtherApps])
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
-            CursorPaster.pasteAtCursor(text)
-        }
     }
 
     private func resolvedTargetApplication() -> NSRunningApplication? {

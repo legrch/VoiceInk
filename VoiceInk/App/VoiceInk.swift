@@ -176,6 +176,7 @@ struct VoiceInkApp: App {
         _prewarmService = StateObject(wrappedValue: prewarmService)
 
         appDelegate.menuBarManager = menuBarManager
+        appDelegate.configureDevSwitch(engine: engine)
 
         // Ensure no lingering recording state from previous runs
         Task {

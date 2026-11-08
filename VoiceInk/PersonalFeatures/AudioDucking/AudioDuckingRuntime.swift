@@ -85,6 +85,10 @@ final class AudioDuckingRuntime {
     private(set) var lease = AudioDuckingLease()
     private(set) var status: Status = .idle
     private(set) var failureReason = "none"
+    /// Caller cancellation does not imply that the service's fade or setter ended.
+    var blocksApplicationExit: Bool {
+        hasPendingWrite || status == .active || status == .restoring
+    }
     private(set) var failureLevels: (before: Float, target: Float, observed: Float)?
     private(set) var effectiveConfiguration: AudioDuckingConfiguration?
     private var beginSnapshot: AudioDuckingOutputSnapshot?

@@ -253,7 +253,7 @@ struct HistoryDetailActionBar: View {
         isWorking = true
         let service = AudioTranscriptionService(modelContext: modelContext, engine: engine)
 
-        Task {
+        DevSwitchActivity.shared.track {
             do {
                 let result = try await service.retranscribeAudio(
                     from: audioURL,
@@ -298,8 +298,10 @@ struct HistoryDetailActionBar: View {
 
         isWorking = true
         let configuration = baseConfiguration.replacingPrompt(prompt)
+        let activityToken = DevSwitchActivity.shared.beginWork()
 
-        Task {
+        Task { @MainActor in
+            defer { DevSwitchActivity.shared.endWork(activityToken) }
             do {
                 transcription.aiEnhancementModelName =
                     configuration.modelName ?? configuration.provider?.defaultModel

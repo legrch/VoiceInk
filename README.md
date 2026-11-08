@@ -20,7 +20,7 @@ curl -fsSL https://raw.githubusercontent.com/legrch/VoiceInk/main/scripts/instal
 
 The same command handles first installation and updates. It verifies the pinned installer, release archive and app signature, backs up an existing app and its data, and installs to `/Applications/VoiceInk.app` with rollback on replacement failure. Then open **VoiceInk** from Applications. No Xcode, Git, patches, signing certificate or sudo is needed.
 
-This command trusts the bootstrap script maintained in this fork's `main`; it checks the immutable installation payload before executing it. `latest` selects **VoiceInk Plus 2.25 · r3** (`plus-v2.25-r3`, build `1003`). Future published releases update the reviewed bootstrap pins, so the command stays the same. To select this release explicitly, replace `latest` with `plus-v2.25-r3`. The historical `personal-2.25.1` remains available by its exact name.
+This command trusts the bootstrap script maintained in this fork's `main`; it checks the immutable installation payload before executing it. `latest` selects the newest published Plus release (currently **2.25 · r3**, build `1003`). The installer code remains pinned; future releases provide validated release metadata, so the command stays the same. To select this release explicitly, replace `latest` with `plus-v2.25-r3`. The historical `personal-2.25.1` remains available by its exact name.
 
 **Apple Silicon (M1 or later), macOS 15+.** This build is locally signed, **not Apple-notarized**. If macOS asks, approve this trusted copy in **System Settings > Privacy & Security > Open Anyway** ([Apple's instructions](https://support.apple.com/en-gb/102445)). First launch uses VoiceInk's normal microphone/Accessibility and model/provider setup. The installer never changes Gatekeeper or creates a personal profile on your behalf.
 
@@ -29,6 +29,10 @@ Backups are under `~/Library/Application Support/VoiceInk-Personal-Backups/relea
 For a custom destination, add `--destination "$HOME/Applications/VoiceInk.app"` after `latest` (create that directory first); custom destinations retain app-only backups beside the app. Keep VoiceInk closed until installation finishes. The command permits replacement of an existing signed VoiceInk and always preserves a backup.
 
 You can also [download the ZIP](https://github.com/legrch/VoiceInk/releases/latest), extract it, and move `VoiceInk.app` into Applications after quitting and preserving your previous copy. For a fully pinned installation command with the bootstrap verified before execution, see the [existing release instructions](https://github.com/legrch/VoiceInk/releases/tag/personal-2.25.1).
+
+## Development and releases
+
+Use **`task dev`** for a signed local Dev candidate with the same profile, one rolling backup and an idle-aware switch back to stable. Use **`task release`** from reviewed, green `main` to push the manifest tag and start GitHub Actions. See [the development guide](docs/DEVELOPMENT.md) for the one-time signing setup and the initial r3 compatibility step. CI/release automation is not fully qualified until its signed GitHub dry run passes.
 
 ## Set up audio ducking
 

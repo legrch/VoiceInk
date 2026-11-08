@@ -1,0 +1,55 @@
+name: Checks
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  macos-build:
+    runs-on: xcode-27
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Prepare platform tools
+        run: scripts/ci/prepare-tools.sh
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: stable
+          cache: false
+      - name: Tests
+        run: |
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 -shellcheck= -pyflakes= .github/workflows/*.yml
+          Tools/AudioDuckingTests/run.sh
+          Tools/PlusReleaseTests/run.sh
+          Tools/AutomationTests/run.sh
+          Tools/ReleaseInstallTests/test-bootstrap.sh
+      - name: Prepare pinned Whisper
+        run: scripts/ci/prepare-whisper.sh
+      - name: Resolve pinned packages
+        env:
+          VOICEINK_DERIVED_DATA: ${{ runner.temp }}/voiceink-derived
+        run: scripts/ci/resolve-packages.sh
+      - name: Build development artifact without release credentials
+        env:
+          VOICEINK_DERIVED_DATA: ${{ runner.temp }}/voiceink-derived
+          VOICEINK_BUILD_OUTPUT: ${{ runner.temp }}/VoiceInk-Dev
+        run: |
+          scripts/build-app.sh ci
+          cp LICENSE "$VOICEINK_BUILD_OUTPUT/LICENSE"
+          printf 'Source: https://github.com/legrch/VoiceInk/tree/%s\n' "$GITHUB_SHA" > "$VOICEINK_BUILD_OUTPUT/SOURCE.txt"
+          ditto -c -k --sequesterRsrc --keepParent "$VOICEINK_BUILD_OUTPUT" "$RUNNER_TEMP/VoiceInk-Dev.zip"
+      - if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: VoiceInk-Dev-${{ github.sha }}
+          path: ${{ runner.temp }}/VoiceInk-Dev.zip
+          retention-days: 1
+          if-no-files-found: error

@@ -112,6 +112,10 @@ final class AudioDuckingService {
         guard unsettledWrites.allows(identity.uid), let journal else { return true }
         return (try? journal.isAcknowledgedDeviceBlocked(identity.uid)) != false
     }
+    var isIdleForAppSwitch: Bool {
+        queue.sync { captureActivity.isIdle && !runtime.blocksApplicationExit && recoveryToken == nil }
+    }
+
     var isQuarantined: Bool {
         queue.sync {
             retainUnsettledWrites()

@@ -103,3 +103,10 @@ Icon
 Network Trash Folder
 Temporary Items
 .apdisk
+
+# Fork development build output
+.dev-build/
+
+# Python helper bytecode
+__pycache__/
+*.pyc

@@ -1,6 +1,6 @@
 // LocalBuild.xcconfig
 // Build configuration for local builds with an ad-hoc fallback when no Apple Development identity is available.
-// Applied only by `make local` on top of Release; normal Xcode configurations are unchanged.
+// Applied by the fork build scripts and make local; normal Xcode configurations are unchanged.
 
 // make local selects an Apple Development identity or the ad-hoc fallback.
 // Leave CODE_SIGN_IDENTITY unset here: -xcconfig overrides command-line settings.

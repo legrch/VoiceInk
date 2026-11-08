@@ -21,23 +21,58 @@ backup_user_data() {
     [[ ! -f "$prefs" ]] || ditto "$prefs" "$backup/Preferences.plist"
 }
 
+# Release metadata is data only. URLs and the certificate trust root stay in code.
+load_release() {
+    local requested=$1 manifest=${2:-} local_archive=${3:-} selected=$1
+    if [[ "$selected" == latest ]]; then
+        if [[ -n "$local_archive" && -z "$manifest" ]]; then selected=$VERSION
+        else
+            curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --max-filesize 1048576 \
+                https://api.github.com/repos/legrch/VoiceInk/releases/latest -o "$work/latest.json"
+            selected=$(plutil -extract tag_name raw -o - "$work/latest.json") || die 'Invalid latest-release metadata.'
+        fi
+    fi
+    [[ "$selected" =~ ^plus-v[0-9]+\.[0-9]+(\.[0-9]+)?-r[1-9][0-9]*$ ]] || die 'Invalid release tag.'
+    # The last pre-CI release has no manifest. Its immutable archive remains pinned.
+    if [[ "$selected" == "$VERSION" && -z "$manifest" ]]; then return; fi
+    if [[ -z "$manifest" ]]; then
+        manifest="$work/release.json"
+        curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --max-filesize 16384 \
+            "https://github.com/legrch/VoiceInk/releases/download/$selected/release.json" -o "$manifest"
+    fi
+    [[ -f "$manifest" && $(stat -f %z "$manifest") -le 16384 ]] || die 'Invalid release manifest size.'
+    local schema tag upstream revision build asset checksum
+    schema=$(plutil -extract schema raw -o - "$manifest") || die 'Missing manifest schema.'
+    tag=$(plutil -extract tag raw -o - "$manifest") || die 'Missing release tag.'
+    upstream=$(plutil -extract upstream_version raw -o - "$manifest") || die 'Missing upstream version.'
+    revision=$(plutil -extract revision raw -o - "$manifest") || die 'Missing fork revision.'
+    build=$(plutil -extract build raw -o - "$manifest") || die 'Missing build.'
+    asset=$(plutil -extract asset raw -o - "$manifest") || die 'Missing archive name.'
+    checksum=$(plutil -extract archive_sha256 raw -o - "$manifest") || die 'Missing archive checksum.'
+    [[ "$schema" == 1 && "$upstream" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ && "$revision" =~ ^[1-9][0-9]{0,8}$ ]] || die 'Invalid release identity.'
+    [[ "$build" =~ ^[1-9][0-9]{2,8}$ && "$build" -gt 225 ]] || die 'Invalid release build.'
+    [[ "$tag" == "$selected" && "$tag" == "plus-v$upstream-r$revision" ]] || die 'Manifest tag mismatch.'
+    [[ "$asset" == "VoiceInk-Plus-$upstream-r$revision-AppleSilicon.zip" && "$checksum" =~ ^[a-f0-9]{64}$ ]] || die 'Invalid archive identity.'
+    VERSION=$tag; UPSTREAM_VERSION=$upstream; BUILD_NUMBER=$build; ASSET=$asset; ARCHIVE_SHA256=$checksum
+}
+
 main() {
     destination=/Applications/VoiceInk.app
-    local archive='' replace=false requested_version=latest version_seen=false
+    local archive='' manifest='' replace=false requested_version=latest version_seen=false
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --destination) [[ $# -ge 2 ]] || die 'Missing destination'; destination=$2; shift 2 ;;
+            --manifest) [[ $# -ge 2 && -z "$manifest" ]] || die 'Specify --manifest once, with a path.'; manifest=$2; shift 2 ;;
             --archive) [[ $# -ge 2 ]] || die 'Missing archive'; archive=$2; shift 2 ;;
             --version)
                 [[ $# -ge 2 && "${2:-}" != --* && "$version_seen" == false ]] || die 'Specify --version once, with a value.'
                 requested_version=$2; version_seen=true; shift 2 ;;
             --replace-existing) replace=true; shift ;;
-            --help) echo 'Usage: bash install.sh [--version latest|plus-v2.25-r3] [--replace-existing] [--archive /path/release.zip] [--destination /path/VoiceInk.app]'; return ;;
+            --help) echo 'Usage: bash install.sh [--version latest|plus-vVERSION-rN] [--replace-existing] [--archive /path/release.zip] [--manifest /path/release.json] [--destination /path/VoiceInk.app]'; return ;;
             *) die "Unknown argument: $1" ;;
         esac
     done
-    [[ "$requested_version" == latest || "$requested_version" == "$VERSION" ]] || die "Unsupported version: $requested_version. Use the installer from the desired release."
-    echo "Selected VoiceInk Plus $VERSION (requested: $requested_version)."
+    [[ "$requested_version" == latest || "$requested_version" =~ ^plus-v[0-9]+\.[0-9]+(\.[0-9]+)?-r[1-9][0-9]*$ ]] || die "Unsupported version: $requested_version."
     [[ $(uname -s) == Darwin && $(uname -m) == arm64 ]] || die 'Requires an Apple Silicon Mac.'
     [[ $(sw_vers -productVersion | cut -d. -f1) -ge 15 ]] || die 'Requires macOS 15 or newer.'
     [[ "$destination" == /*/VoiceInk.app && "$destination" != *$'
@@ -77,6 +112,8 @@ main() {
     trap 'exit 143' TERM
     mkdir "$lock" 2>/dev/null || die 'Another installation or a retained install lock exists. Inspect it before retrying.'
     locked=true
+    load_release "$requested_version" "$manifest" "$archive"
+    echo "Selected VoiceInk Plus $VERSION (requested: $requested_version)."
     if [[ -z "$archive" ]]; then
         archive="$work/$ASSET"
         curl --fail --location --proto '=https' --proto-redir '=https' --output "$archive" \
@@ -88,6 +125,9 @@ main() {
     local candidate="$work/unpacked/VoiceInk-Plus/VoiceInk.app"
     [[ -d "$candidate" && ! -L "$candidate" ]] || die 'Expected application missing from archive.'
     codesign --verify --deep --strict "$candidate"
+    if /usr/libexec/PlistBuddy -c 'Print VoiceInkDevDescription' "$candidate/Contents/Info.plist" >/dev/null 2>&1; then
+        die 'Refusing to install a development build as a stable release.'
+    fi
     [[ $(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$candidate/Contents/Info.plist") == "$BUNDLE_ID" ]] || die 'Unexpected bundle identifier.'
     [[ $(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$candidate/Contents/Info.plist") == "$UPSTREAM_VERSION" ]] || die 'Unexpected upstream version.'
     [[ $(/usr/libexec/PlistBuddy -c 'Print CFBundleVersion' "$candidate/Contents/Info.plist") == "$BUILD_NUMBER" ]] || die 'Unexpected Plus build.'

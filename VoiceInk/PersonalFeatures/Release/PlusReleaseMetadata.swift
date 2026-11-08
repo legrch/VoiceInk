@@ -8,6 +8,7 @@ struct PlusReleaseMetadata: Equatable {
     let revision: String
     let build: String
     let tag: String
+    let developmentDescription: String?
     static let product = "VoiceInk Plus"
     static let latestReleaseURL = URL(string: "https://github.com/legrch/VoiceInk/releases/latest")!
     static let repositoryURL = URL(string: "https://github.com/legrch/VoiceInk")!
@@ -30,6 +31,14 @@ struct PlusReleaseMetadata: Equatable {
         self.revision = revision
         self.build = build
         self.tag = tag
+        if let description = info["VoiceInkDevDescription"] as? String {
+            guard !description.isEmpty, description.utf8.count <= 160,
+                  description.range(of: #"^[A-Za-z0-9._+-]+$"#, options: .regularExpression) != nil else { return nil }
+            developmentDescription = description
+        } else { developmentDescription = nil }
     }
-    var displayVersion: String { "\(upstreamVersion) · r\(revision)" }
+    var displayVersion: String {
+        let version = "\(upstreamVersion) · r\(revision)"
+        return developmentDescription.map { "\(version) · Dev \($0)" } ?? version
+    }
 }

@@ -76,7 +76,9 @@ class AudioTranscriptionManager: ObservableObject {
         processingGeneration &+= 1
         let generation = processingGeneration
 
+        let devSwitchWork = DevSwitchActivity.shared.beginWork()
         processingTask = Task { [weak self] in
+            defer { DevSwitchActivity.shared.endWork(devSwitchWork) }
             guard let self else { return }
 
             while let item = self.nextPendingItem() {

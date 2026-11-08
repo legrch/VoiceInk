@@ -1,0 +1,5 @@
+# actionlint 1.7.7 predates this standard GitHub-hosted public runner label.
+# This config only extends lint validation; workflows do not use self-hosted runners.
+self-hosted-runner:
+  labels:
+    - xcode-27

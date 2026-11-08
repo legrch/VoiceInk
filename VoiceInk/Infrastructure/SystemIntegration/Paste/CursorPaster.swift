@@ -31,12 +31,16 @@ class CursorPaster {
     private static var pasteQueueTask: Task<Void, Never>?
     private static let textContextReader = PasteTextContextReader()
 
+    @MainActor
     static func pasteAtCursor(_ text: String) {
-        Task {
-            let pasteTask = await MainActor.run {
-                startPasteAtCursor(text)
-            }
-            _ = await pasteTask.value
+        startPasteAtCursor(text)
+    }
+
+    @MainActor
+    static func schedulePasteAtCursor(_ text: String, afterNanoseconds delay: UInt64) {
+        DevSwitchActivity.shared.track(afterNanoseconds: delay) {
+            let paste = startPasteAtCursor(text)
+            _ = await paste.value
         }
     }
 
@@ -50,7 +54,7 @@ class CursorPaster {
             return await performPasteSession(text, sendKey: sendKey, requestedAt: requestedAt)
         }
 
-        pasteQueueTask = Task { @MainActor in
+        pasteQueueTask = DevSwitchActivity.shared.track {
             let session = await sessionTask.value
             await session.clipboardRestoreTask?.value
         }
