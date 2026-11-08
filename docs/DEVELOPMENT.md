@@ -47,7 +47,7 @@ This selects only the existing VoiceInk certificate by its fixed SHA-256, export
 
 The final app is re-signed with hardened runtime explicitly enabled, and the final CodeDirectory flags are checked before packaging. Existing release environments are matched case-insensitively and their protection rules are preserved.
 
-Package resolution runs before key import, stays pinned to Package.resolved and retries only a known transient connection or HTTP 502/503/504 error (at most three attempts). Permission/auth/checksum failures are not retried. A runner imports the identity into a temporary keychain, verifies the fixed certificate fingerprint and removes the keychain afterward. Only release builds receive it. A manual **Release → Run workflow** on `main` is a signed packaging/install/rollback dry run and never publishes, uploads a release artifact or changes an installed app.
+Package resolution runs before key import, stays pinned to Package.resolved and retries only a known transient connection or HTTP 502/503/504 error (at most three attempts). Permission/auth/checksum failures are not retried. A runner imports the identity into a temporary keychain, verifies the fixed certificate fingerprint and removes the keychain afterward. Only release builds receive it. A manual **Release → Run workflow** defaults to **dry-run**: signed packaging/install/rollback without publication, release-asset upload or changes to an installed app. Explicit **publish** mode on `main` follows the release path below.
 
 ## Publish on explicit request
 
@@ -88,6 +88,8 @@ task release:dry-run
 Or manually run **Release**, mode **dry-run** (the default). It computes candidate metadata, builds/signs/packages and verifies disposable installation/rollback without reserving a tag, publishing or uploading release assets. A branch may be selected for a trusted candidate dry run; it still goes through the signing environment. A publishing request must select `main`. Source review, fake tests, PR CI, a protected signed dry run and actual publication remain separate evidence.
 
 The user installation command stays unchanged. Its code is pinned by commit/hash; releases supply validated JSON data, not executable installer code from mutable metadata. No automatic in-app updater is enabled.
+
+Server release planning starts from this fork's manifest-bearing r4 baseline. It does not bootstrap a repository whose latest release is the historical manifest-free r3; the installer's separate r3 compatibility remains unchanged.
 
 ## Qualification status
 

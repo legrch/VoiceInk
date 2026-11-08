@@ -43,7 +43,7 @@ The existing upstream `scripts/release.sh` assumes upstream tags and Sparkle met
 2. Merge that upstream revision, retaining our audio module, narrow recording/settings seams, stable-shortcut behavior and disabled upstream updater. Resolve conflicts explicitly.
 3. Run affected tests and a composed app build; validate signature, package, backup and isolated rollback. Qualify the exact candidate through the applicable source-review gate.
 4. Merge through a merge commit after required checks. Preserve published history; do not rebase or force-push stable `main`.
-5. Build/package the accepted source, verify its provenance, then publish the approved release and update the bootstrap pins. Verify the public download and isolated installation; qualify actual audio behavior separately.
+5. Request publication of the accepted source with `task release` or **Release → Run workflow → publish** on `main`. Actions allocates its identity and builds/packages/signs it. Keep bootstrap pins unchanged unless deliberately maintaining the installer. Verify the public download and isolated installation; qualify actual audio behavior separately.
 
 `personal/build` is historical. `scripts/personal-update.sh` is its legacy source-rebase helper, not the stable-main update procedure or the end-user installer. Completed temporary PR branches may be removed after verifying ancestry and custody; preserve unmerged WIP and checkpoints.
 
