@@ -14,6 +14,7 @@ if [[ "$mode" == release && -n $(git status --porcelain) ]]; then
   echo 'Release builds require a clean committed checkout; use dev for local edits.' >&2; exit 1
 fi
 python3 scripts/plus-release.py check
+source_commit=$(git rev-parse HEAD)
 [[ -d "$HOME/VoiceInk-Dependencies/whisper.cpp/build-apple/whisper.xcframework" ]] || { echo 'Run scripts/ci/prepare-whisper.sh first.' >&2; exit 1; }
 xcodebuild -project VoiceInk.xcodeproj -scheme VoiceInk -configuration Release \
   -derivedDataPath "$derived" -xcconfig LocalBuild.xcconfig \
@@ -24,7 +25,10 @@ xcodebuild -project VoiceInk.xcodeproj -scheme VoiceInk -configuration Release \
 mkdir -p "$output"
 [[ ! -e "$output/VoiceInk.app" ]] || { echo 'Build output already exists; choose a fresh VOICEINK_BUILD_OUTPUT.' >&2; exit 1; }
 ditto "$derived/Build/Products/Release/VoiceInk.app" "$output/VoiceInk.app"
-source_commit=$(git rev-parse HEAD)
+[[ $(git rev-parse HEAD) == "$source_commit" ]] || { echo 'Source HEAD changed during the build; rebuild the intended candidate.' >&2; exit 1; }
+if [[ "$mode" == release && -n $(git status --porcelain) ]]; then
+  echo 'Release source changed during the build; refusing to package it.' >&2; exit 1
+fi
 description=$(git describe --tags --match 'plus-v*' --long --always --dirty)
 python3 scripts/stamp-build.py "$output/VoiceInk.app" "$mode" "$source_commit" "$description"
 codesign --force --sign "$identity" --entitlements VoiceInk/VoiceInk.local.entitlements "$output/VoiceInk.app"

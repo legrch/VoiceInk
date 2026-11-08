@@ -18,11 +18,8 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Select Xcode
-        run: |
-          sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
-          xcodebuild -version
-          xcodebuild -downloadComponent MetalToolchain
+      - name: Prepare platform tools
+        run: scripts/ci/prepare-tools.sh
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: stable

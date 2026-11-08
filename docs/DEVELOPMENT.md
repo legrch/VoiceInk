@@ -14,7 +14,7 @@ This builds first, without disturbing the running app. It then requests an app-o
 
 Both apps show their upstream/fork version in About; Dev also shows `git describe`, including distance from the last Plus tag, abbreviated commit and a dirty marker when applicable. The bundle identifier and signing certificate stay the same, retaining permissions. Do not open another copy manually while testing Dev.
 
-The installed r3 predates the idle-switch protocol. Close it once with Command-Q before the first test; after stable is upgraded to a protocol-aware build, subsequent `task dev` sessions switch automatically. Unsupported old copies are never guessed idle from microphone activity. Interrupting the waiting launcher cancels its request; a dead requester cannot leave a deferred quit armed. Concurrent launchers are refused by a shared-profile session lock.
+The installed r3 predates the idle-switch protocol. Close it once with Command-Q before the first test; after stable is upgraded to a protocol-aware build, subsequent `task dev` sessions switch automatically. Unsupported old copies are never guessed idle from microphone activity. The wait is bounded to twenty minutes. Interrupting or timing out the waiting launcher cancels its request; a dead requester cannot leave a deferred quit armed. Concurrent launchers are refused by a shared-profile session lock.
 
 The only rolling Dev data backup is `~/Library/Application Support/VoiceInk-Personal-Backups/dev-latest`. A new snapshot is copied and byte-checked before replacing the previous snapshot; on failure the previous verified snapshot remains. There can briefly be a staging/previous directory during rotation. Historical release-install backups are separate. Nothing is backed up during live recording.
 

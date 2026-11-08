@@ -23,8 +23,8 @@ cmake -S . -B build-ci -G Xcode -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPL
 cmake --build build-ci --config Release -- -quiet
 framework="$root/build-ci/framework/whisper.framework"
 mkdir -p "$framework/Versions/A/Headers" "$framework/Versions/A/Modules" "$framework/Versions/A/Resources"
-ln -s A "$framework/Versions/Current"
-for part in Headers Modules Resources whisper; do ln -s "Versions/Current/$part" "$framework/$part"; done
+ln -sfn A "$framework/Versions/Current"
+for part in Headers Modules Resources whisper; do ln -sfn "Versions/Current/$part" "$framework/$part"; done
 cp include/whisper.h ggml/include/ggml*.h ggml/include/gguf.h "$framework/Headers/"
 cat > "$framework/Modules/module.modulemap" <<'MODULE'
 framework module whisper {
@@ -44,7 +44,7 @@ framework module whisper {
 }
 MODULE
 mapfile_path="$root/build-ci/static-libraries.txt"
-find "$root/build-ci" -type f -name '*.a' > "$mapfile_path"
+find "$root/build-ci" -type f -name '*.a' ! -name combined.a > "$mapfile_path"
 libraries=(); while IFS= read -r library; do libraries+=("$library"); done < "$mapfile_path"
 [[ ${#libraries[@]} -gt 0 ]]
 xcrun libtool -static -o "$root/build-ci/combined.a" "${libraries[@]}"

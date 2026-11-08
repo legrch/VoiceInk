@@ -73,8 +73,8 @@ sed -n '2,6p' "$fixture/plus/invocation" > "$fixture/actual"
 printf '%s\n' --version "$release_version" --replace-existing --destination /Applications/VoiceInk.app > "$fixture/expected"
 cmp "$fixture/actual" "$fixture/expected"
 assert_cleaned plus
-rg -q '7852619a59ba84f34e386019c55eaf8fa1ba5eeb' "$fixture/explicit/download"
-! rg -q '7852619a59ba84f34e386019c55eaf8fa1ba5eeb' "$fixture/plus/download"
+grep -q '7852619a59ba84f34e386019c55eaf8fa1ba5eeb' "$fixture/explicit/download"
+! grep -q '7852619a59ba84f34e386019c55eaf8fa1ba5eeb' "$fixture/plus/download"
 for mode in download-failure corrupt payload-failure; do
     expected=1
     [[ "$mode" != download-failure ]] || expected=22
@@ -98,5 +98,5 @@ for name in unknown empty missing-path repeated-destination unknown-flag; do
 done
 /bin/sh -n "$bootstrap"
 cat "$bootstrap" | /bin/sh -s -- --help > "$fixture/help"
-rg -q '^Usage:' "$fixture/help"
+grep -q '^Usage:' "$fixture/help"
 printf 'PASS: bootstrap default/exact version, quoting, real checksum, corrupt/download failures, child status, cleanup and stock sh pipe entry. No app installed.\n'
