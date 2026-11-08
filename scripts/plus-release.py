@@ -3,30 +3,19 @@
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import plistlib
 import re
 import shutil
 import subprocess
 import tempfile
+from release_identity import base_metadata, effective_metadata, info_fields, require
 
 ROOT = Path(__file__).resolve().parent.parent
 
 def metadata():
-    m = json.loads((ROOT / "release/plus.json").read_text())
-    assert m["schema"] == 1 and m["product"] == "VoiceInk Plus", "Unsupported release metadata"
-    assert re.fullmatch(r"[0-9]+(?:\.[0-9]+){1,2}", m["upstream_version"]), "Invalid upstream version"
-    assert re.fullmatch(r"[a-f0-9]{40}", m["upstream_commit"]), "Invalid upstream commit"
-    assert type(m["revision"]) is int and m["revision"] > 0, "Invalid revision"
-    assert type(m["build"]) is int and m["build"] > 225, "Build must exceed legacy build 225"
-    m["tag"] = f"plus-v{m['upstream_version']}-r{m['revision']}"
-    m["asset"] = f"VoiceInk-Plus-{m['upstream_version']}-r{m['revision']}-AppleSilicon.zip"
-    return m
-
-def info_fields(m):
-    return {"CFBundleShortVersionString": m["upstream_version"], "CFBundleVersion": str(m["build"]),
-            "VoiceInkPlusProduct": m["product"], "VoiceInkPlusRevision": str(m["revision"]),
-            "VoiceInkPlusTag": m["tag"], "VoiceInkUpstreamCommit": m["upstream_commit"]}
+    return base_metadata(ROOT)
 
 def project_identity(m, write=False):
     path = ROOT / "VoiceInk.xcodeproj/project.pbxproj"
@@ -40,22 +29,22 @@ def project_identity(m, write=False):
         matched += 1
         for key, value in [("CURRENT_PROJECT_VERSION", str(m["build"])), ("MARKETING_VERSION", m["upstream_version"])]:
             found = re.search(rf"{key} = ([^;]+);", body)
-            assert found, f"Missing main-app setting {key}"
+            require(found, f"Missing main-app setting {key}")
             if write:
                 body = re.sub(rf"{key} = [^;]+;", f"{key} = {value};", body)
             else:
-                assert found.group(1) == value, f"Main-app {key} must be {value}; run sync-info"
+                require(found.group(1) == value, f"Main-app {key} must be {value}; run sync-info")
         return match.group(1) + body + match.group(3)
     updated = re.sub(r"(?ms)(^\t\t\tbuildSettings = \{)(.*?)(^\t\t\t\};)", main_settings, text)
-    assert matched == 2, "Expected only the main app Debug/Release settings"
+    require(matched == 2, "Expected only the main app Debug/Release settings")
     if write:
         path.write_text(updated)
 
 def check_info(path, m):
     info = plistlib.loads(path.read_bytes())
     for key, expected in info_fields(m).items():
-        assert info.get(key) == expected, f"{path}: {key} must be {expected!r}, found {info.get(key)!r}"
-    assert "SUFeedURL" not in info, "Upstream Sparkle feed must remain absent"
+        require(info.get(key) == expected, f"{path}: {key} must be {expected!r}, found {info.get(key)!r}")
+    require("SUFeedURL" not in info, "Upstream Sparkle feed must remain absent")
     return info
 
 def main():
@@ -66,7 +55,11 @@ def main():
     p.add_argument("--archive", type=Path)
     p.add_argument("--commit")
     a = p.parse_args()
-    m = metadata()
+    base = metadata()
+    has_override = "VOICEINK_RELEASE_METADATA" in os.environ
+    require(not (has_override and a.operation in ("sync-info", "pin-installer", "pin-bootstrap")), "Release metadata override is not allowed for source operations")
+    source = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip() if has_override else ""
+    m = effective_metadata(ROOT, source) if has_override else base
     source_info = ROOT / "VoiceInk/Info.plist"
     if a.operation == "show":
         print(json.dumps(m, indent=2)); return
@@ -75,20 +68,24 @@ def main():
         source_info.write_bytes(plistlib.dumps(info, sort_keys=False))
         project_identity(m, write=True)
         return
-    project_identity(m)
-    check_info(source_info, m)
+    project_identity(base)
+    check_info(source_info, base)
+    def check_app():
+        info = check_info(a.app / "Contents/Info.plist", m)
+        require(info.get("CFBundleIdentifier") == "com.prakashjoshipax.VoiceInk", "Unexpected app bundle identifier")
+        if has_override:
+            require(info.get("VoiceInkSourceCommit") == source, "App source commit mismatch")
+        for helper in (a.app / "Contents").rglob("*.xpc/Contents/Info.plist"):
+            h = plistlib.loads(helper.read_bytes())
+            require("VoiceInkPlusTag" not in h and h.get("CFBundleVersion") != str(m["build"]), "Helper identity was globally overridden")
+        return info
     if a.operation == "check":
         if a.app:
-            info = check_info(a.app / "Contents/Info.plist", m)
-            assert info["CFBundleIdentifier"] == "com.prakashjoshipax.VoiceInk"
-            # The main-app identity must not overwrite helper versions.
-            for helper in (a.app / "Contents").rglob("*.xpc/Contents/Info.plist"):
-                h = plistlib.loads(helper.read_bytes())
-                assert "VoiceInkPlusTag" not in h and h.get("CFBundleVersion") != str(m["build"]), "Helper identity was globally overridden"
+            check_app()
         print(f"Verified {m['product']} {m['tag']} (build {m['build']})"); return
     if a.operation == "package":
         assert a.app and a.output and a.app.is_dir(), "Pass --app and --output directory"
-        app_info = check_info(a.app / "Contents/Info.plist", m)
+        app_info = check_app()
         assert "VoiceInkDevDescription" not in app_info, "Refusing to package a development app"
         subprocess.run(["codesign", "--verify", "--deep", "--strict", str(a.app)], check=True)
         a.output.mkdir(parents=True, exist_ok=True)

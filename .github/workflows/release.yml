@@ -1,38 +1,101 @@
 name: Release
+run-name: Release ${{ github.event_name == 'push' && github.ref_name || inputs.mode }}
 on:
   push:
     tags: ['plus-v*']
   workflow_dispatch:
+    inputs:
+      mode:
+        description: Dry run, or explicitly reserve a tag and publish
+        type: choice
+        options: [dry-run, publish]
+        default: dry-run
+      expected_source:
+        description: Optional exact main SHA supplied by task release
+        type: string
+        default: ''
 permissions:
   contents: read
 concurrency:
-  group: release-${{ github.ref }}
+  group: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'dry-run' && format('voiceink-dry-{0}', github.run_id) || 'voiceink-release' }}
   cancel-in-progress: false
 jobs:
-  signed-build:
+  plan:
     if: github.repository == 'legrch/VoiceInk'
-    runs-on: xcode-27
-    timeout-minutes: 90
-    environment: release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      ready: ${{ steps.plan.outputs.ready }}
+      publish: ${{ steps.plan.outputs.publish }}
+      source: ${{ steps.plan.outputs.source }}
+      tag: ${{ steps.plan.outputs.tag }}
+      metadata: ${{ steps.plan.outputs.metadata }}
+      reservation: ${{ steps.plan.outputs.reservation }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check source defaults
+        run: python3 scripts/plus-release.py check
+      - name: Plan explicit release
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_MODE: ${{ inputs.mode || 'dry-run' }}
+          EXPECTED_SOURCE: ${{ inputs.expected_source }}
+        run: python3 scripts/ci/server-release.py plan
+  reserve:
+    needs: plan
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    outputs:
+      tag_object: ${{ steps.reserve.outputs.tag_object }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.plan.outputs.source }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Reserve immutable tag
+        id: reserve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VOICEINK_RELEASE_RESERVATION: ${{ needs.plan.outputs.reservation }}
+        run: python3 scripts/ci/server-release.py reserve
+  signed-build:
+    needs: [plan, reserve]
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.ready == 'true' && (needs.reserve.result == 'success' || needs.plan.outputs.publish == 'false') }}
+    runs-on: xcode-27
+    timeout-minutes: 90
+    environment: release
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.plan.outputs.source }}
           fetch-depth: 0
           persist-credentials: false
       - name: Prepare platform tools
         run: scripts/ci/prepare-tools.sh
-      - name: Validate release source
+      - name: Validate reserved source before signing
+        if: needs.plan.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          EVENT_NAME: ${{ github.event_name }}
-          TAG_NAME: ${{ github.ref_name }}
-        run: |
-          if [[ "$EVENT_NAME" == push ]]; then
-            scripts/ci/validate-tag.py "$TAG_NAME"
-          else
-            tag=$(python3 scripts/plus-release.py show | python3 -c 'import sys,json; print(json.load(sys.stdin)["tag"])')
-            scripts/ci/validate-tag.py "$tag" --dry-run
-          fi
+          VOICEINK_RELEASE_RESERVATION: ${{ needs.plan.outputs.reservation }}
+          VOICEINK_RELEASE_TAG_OBJECT: ${{ needs.reserve.outputs.tag_object }}
+          VOICEINK_RELEASE_METADATA: ${{ needs.plan.outputs.metadata }}
+        run: python3 scripts/ci/server-release.py verify
       - name: Check signing configuration
         env:
           VOICEINK_P12_BASE64: ${{ secrets.VOICEINK_P12_BASE64 }}
@@ -63,6 +126,8 @@ jobs:
         run: scripts/ci/signing.sh
       - name: Build, package and verify release
         env:
+          GH_TOKEN: ${{ github.token }}
+          VOICEINK_RELEASE_METADATA: ${{ needs.plan.outputs.metadata }}
           VOICEINK_SIGNING_IDENTITY: C5C6F16ED5A3D8B28CF3A4CA19638284E9190C6B
           VOICEINK_DERIVED_DATA: ${{ runner.temp }}/voiceink-derived
           VOICEINK_BUILD_OUTPUT: /private/tmp/voiceink-ci-release-app
@@ -77,7 +142,7 @@ jobs:
       - name: Remove signing identity
         if: always()
         run: scripts/ci/signing.sh cleanup
-      - if: github.event_name == 'push'
+      - if: needs.plan.outputs.publish == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-assets
@@ -88,15 +153,18 @@ jobs:
     concurrency:
       group: voiceink-publish
       cancel-in-progress: false
-    if: github.event_name == 'push' && github.repository == 'legrch/VoiceInk'
-    needs: signed-build
+    if: ${{ !cancelled() && needs.signed-build.result == 'success' && needs.plan.outputs.publish == 'true' }}
+    needs: [plan, reserve, signed-build]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write
+      actions: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ needs.plan.outputs.source }}
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -106,6 +174,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: legrch/VoiceInk
-          TAG_NAME: ${{ github.ref_name }}
+          TAG_NAME: ${{ needs.plan.outputs.tag }}
+          RELEASE_SOURCE: ${{ needs.plan.outputs.source }}
+          VOICEINK_RELEASE_RESERVATION: ${{ needs.plan.outputs.reservation }}
+          VOICEINK_RELEASE_TAG_OBJECT: ${{ needs.reserve.outputs.tag_object }}
+          VOICEINK_RELEASE_METADATA: ${{ needs.plan.outputs.metadata }}
         run: |
-          python3 scripts/ci/publish-release.py release-assets "$TAG_NAME" "$GITHUB_SHA"
+          python3 scripts/ci/server-release.py verify
+          python3 scripts/ci/publish-release.py release-assets "$TAG_NAME" "$RELEASE_SOURCE"

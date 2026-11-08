@@ -4,6 +4,7 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 mode=${1:-dev}
 [[ "$mode" == dev || "$mode" == release || "$mode" == ci ]] || { echo 'Usage: scripts/build-app.sh dev|release|ci' >&2; exit 2; }
+[[ "$mode" == release || ! ${VOICEINK_RELEASE_METADATA+x} ]] || { echo 'Release metadata override requires release mode.' >&2; exit 1; }
 identity=${VOICEINK_SIGNING_IDENTITY:-C5C6F16ED5A3D8B28CF3A4CA19638284E9190C6B}
 [[ "$mode" != ci ]] || identity=-
 [[ "$mode" != release || "$identity" != - ]] || { echo 'Release requires the existing signing identity.' >&2; exit 1; }

@@ -5,7 +5,7 @@ Status: owner-approved convention. The Plus metadata, About panel and installer 
 ## Published baseline
 
 - Keep the published `personal-2.25.1` tag and assets unchanged. Its application reports upstream version `2.25`, build `225`.
-- `latest` selects `plus-v2.25-r3`; the bootstrap retains a separate immutable installer pin for exact `personal-2.25.1` requests.
+- `latest` resolves the newest published Plus release through GitHub; the bootstrap retains a separate immutable installer pin for exact `personal-2.25.1` requests.
 - The public install/update command remains the one at the top of [README](../README.md).
 
 ## VoiceInk Plus versions
@@ -27,11 +27,11 @@ Keep the full upstream version and our release revision separate. Do not reserve
 
 ## Preparing a Plus release
 
-Follow [Development and automated releases](DEVELOPMENT.md). After a tested/reviewed manifest change is merged to `main` and its macOS check passes, `task release` pushes the new annotated tag. GitHub Actions builds, signs, verifies installation/rollback and publishes the release. The release environment must first be configured with the explicitly approved existing signing identity.
+Follow [Development and automated releases](DEVELOPMENT.md). Integrate code through a reviewed PR and request a release using `task release`, or run the **Release** workflow manually on **main** in **publish** mode. Ordinary main merges never publish.
 
-`release/plus.json` remains the identity source. `scripts/plus-release.py sync-info` generates main-app settings; helpers retain upstream identity. The published JSON manifest describes the ZIP's exact hash and signed app/source identity. Stable installer code remains pinned independently of per-release data.
+GitHub allocates the next revision/build, reserves an annotated tag, generates effective application metadata, builds/signs, verifies installation/rollback and publishes. The command does not edit source files or create a per-release commit/PR. `release/plus.json` remains upstream provenance/local defaults; Actions stamps only the copied app. The reserved annotation and public `release.json` retain the exact released identity and source. Preserve global numeric ordering across published and failed/superseded reservations; do not recycle numbers or tags.
 
-The old `pin-installer` operation is retained only for reproducing historical manually pinned releases. Do not use it for automated releases: the CI manifest carries the archive checksum. `pin-bootstrap --commit` is needed only when installer code itself changes, and must point at its committed exact payload.
+Existing signing protection stays in place, including its inherited administrator-bypass exception. See the development guide for dry runs, queue behavior, immutable reservation recovery and supersession. Historical tags and installer pins remain unchanged. The old `pin-installer`/`pin-bootstrap` operations are only for deliberate installer maintenance or reproducing historical releases, not routine version allocation.
 
 The existing upstream `scripts/release.sh` assumes upstream tags and Sparkle metadata. Do not use it for Plus releases. Package/signature, runtime behavior and owner approval remain separate delivery boundaries.
 
