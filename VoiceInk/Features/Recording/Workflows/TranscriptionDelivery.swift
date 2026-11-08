@@ -105,7 +105,7 @@ final class TranscriptionDelivery {
         await actions.dismiss()
 
         DevSwitchActivity.shared.track {
-            await runCustomCommand(command: command, commandText: commandText, finishAndSendKey: finishAndSendKey)
+            await self.runCustomCommand(command: command, commandText: commandText, finishAndSendKey: finishAndSendKey)
         }
     }
 
