@@ -57,6 +57,7 @@ class LastTranscriptionService: ObservableObject {
         }
     }
 
+    @MainActor
     static func pasteLastTranscription(from modelContext: ModelContext) {
         guard let lastTranscription = getLastTranscription(from: modelContext) else {
             ShortcutDiagnostics.notice("utility action=pasteLastTranscription result=ignored reason=no-history")
@@ -71,11 +72,10 @@ class LastTranscriptionService: ObservableObject {
 
         let textToPaste = lastTranscription.text
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-            CursorPaster.pasteAtCursor(textToPaste)
-        }
+        CursorPaster.schedulePasteAtCursor(textToPaste, afterNanoseconds: 150_000_000)
     }
 
+    @MainActor
     static func pasteLastEnhancement(from modelContext: ModelContext) {
         guard let lastTranscription = getLastTranscription(from: modelContext) else {
             ShortcutDiagnostics.notice("utility action=pasteLastEnhancement result=ignored reason=no-history")
@@ -97,16 +97,15 @@ class LastTranscriptionService: ObservableObject {
             }
         }()
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-            CursorPaster.pasteAtCursor(textToPaste)
-        }
+        CursorPaster.schedulePasteAtCursor(textToPaste, afterNanoseconds: 150_000_000)
     }
 
+    @MainActor
     static func retryLastTranscription(
         from modelContext: ModelContext, transcriptionModelManager: TranscriptionModelManager,
         serviceRegistry: TranscriptionServiceRegistry, enhancementService: AIEnhancementService?
     ) {
-        Task { @MainActor in
+        DevSwitchActivity.shared.track {
             guard let lastTranscription = getLastTranscription(from: modelContext),
                 let audioURLString = lastTranscription.audioFileURL,
                 let audioURL = URL(string: audioURLString),

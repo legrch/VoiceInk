@@ -37,6 +37,14 @@ class CursorPaster {
     }
 
     @MainActor
+    static func schedulePasteAtCursor(_ text: String, afterNanoseconds delay: UInt64) {
+        DevSwitchActivity.shared.track(afterNanoseconds: delay) {
+            let paste = startPasteAtCursor(text)
+            _ = await paste.value
+        }
+    }
+
+    @MainActor
     @discardableResult
     static func startPasteAtCursor(_ text: String, sendKey: FinishAndSendKey = .none) -> Task<PasteOutcome, Never> {
         let requestedAt = ProcessInfo.processInfo.systemUptime

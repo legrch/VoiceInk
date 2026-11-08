@@ -668,7 +668,7 @@ struct AudioPlayerView: View {
         isRetranscribing = true
         operationFeedback = nil
 
-        Task {
+        DevSwitchActivity.shared.track {
             do {
                 let result = try await transcriptionService.retranscribeAudio(
                     from: url,

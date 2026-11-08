@@ -46,3 +46,15 @@ finishCleanup.finish()
 await work.value
 await MainActor.run { check(DevSwitchActivity.shared.isIdle, "Only terminal cleanup releases the app switch") }
 print("Tracked delivery/cleanup lifetime and cancellation passed")
+
+let delayed = await MainActor.run {
+    let task = DevSwitchActivity.shared.track(afterNanoseconds: 60_000_000_000) {
+        preconditionFailure("Cancelled deferred admission must not run")
+    }
+    check(!DevSwitchActivity.shared.isIdle, "Admission blocks quit before the deferred task starts")
+    return task
+}
+delayed.cancel()
+await delayed.value
+await MainActor.run { check(DevSwitchActivity.shared.isIdle, "Cancelled deferred admission releases its token") }
+print("Deferred admission is owned synchronously and cancels without executing")

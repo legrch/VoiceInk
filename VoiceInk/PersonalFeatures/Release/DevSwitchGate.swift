@@ -17,10 +17,14 @@ final class DevSwitchActivity {
     var isIdle: Bool { pendingWork.isEmpty }
     /// Acquire before scheduling; retain ownership through every awaited cleanup.
     @discardableResult
-    func track(_ operation: @escaping @MainActor () async -> Void) -> Task<Void, Never> {
+    func track(afterNanoseconds delay: UInt64 = 0, _ operation: @escaping @MainActor () async -> Void) -> Task<Void, Never> {
         let token = beginWork()
         return Task { @MainActor in
             defer { self.endWork(token) }
+            if delay > 0 {
+                do { try await Task.sleep(nanoseconds: delay) }
+                catch { return }
+            }
             await operation()
         }
     }

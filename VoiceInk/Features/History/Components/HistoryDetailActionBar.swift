@@ -253,7 +253,7 @@ struct HistoryDetailActionBar: View {
         isWorking = true
         let service = AudioTranscriptionService(modelContext: modelContext, engine: engine)
 
-        Task {
+        DevSwitchActivity.shared.track {
             do {
                 let result = try await service.retranscribeAudio(
                     from: audioURL,
