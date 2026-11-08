@@ -40,7 +40,7 @@ scripts/configure-ci-signing.sh --upload
 
 This selects only the existing VoiceInk certificate by its fixed SHA-256, exports that identity with a random password in memory, and uses the signed-in GitHub CLI to upload the two secrets to `legrch/VoiceInk` environment `release` on github.com. macOS may request Keychain authorization. It does not export every identity, print key material or write a P12 into the checkout. Do not invoke it without the owner's explicit approval. If setup fails partway, inspect the two named secrets before another attempt; a partial pair is not a successful setup.
 
-A runner imports the identity into a temporary keychain, verifies the fixed certificate fingerprint and removes the keychain afterward. Only release builds receive it. A manual **Release → Run workflow** on `main` is a signed packaging/install/rollback dry run and never publishes or changes an installed app.
+A runner imports the identity into a temporary keychain, verifies the fixed certificate fingerprint and removes the keychain afterward. Only release builds receive it. A manual **Release → Run workflow** on `main` is a signed packaging/install/rollback dry run and never publishes, uploads a release artifact or changes an installed app.
 
 ## Publish the next version
 
