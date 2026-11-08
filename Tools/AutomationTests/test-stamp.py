@@ -16,3 +16,13 @@ with tempfile.TemporaryDirectory(prefix='voiceink-stamp-tests-',dir='/private/tm
     subprocess.run(['python3','scripts/stamp-build.py',str(app),'release','2'*40,'ignored'],check=True)
     assert 'VoiceInkDevDescription' not in plistlib.loads(path.read_bytes())
 print('Dev display stamping, source identity and prevention of Dev publication passed')
+
+verify_spec=importlib.util.spec_from_file_location('runtime','scripts/verify-runtime.py')
+verify=importlib.util.module_from_spec(verify_spec);verify_spec.loader.exec_module(verify)
+for flags in ['10000','10003']:
+    verify.require_runtime('CodeDirectory v=20400 size=100 flags=0x'+flags+'(runtime) hashes=1+7 location=embedded')
+for description in ['', 'CodeDirectory v=20400 size=100 flags=0x0(none)', 'Executable=/tmp/flags=0x10000(runtime)']:
+    try:verify.require_runtime(description)
+    except RuntimeError:pass
+    else:raise AssertionError('Unhardened or non-CodeDirectory data must fail')
+print('Hardened-runtime verification accepts the runtime bit and rejects missing/spoofed flags')

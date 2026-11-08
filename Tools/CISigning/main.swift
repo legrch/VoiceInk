@@ -35,7 +35,7 @@ guard let owner = try? JSONSerialization.jsonObject(with: ownerData) as? [String
 let pagesData = run(["api", "--paginate", "--slurp", "repos/legrch/VoiceInk/environments"], capture: true)
 guard let pages = try? JSONSerialization.jsonObject(with: pagesData) as? [[String: Any]] else { fail("Cannot inspect existing release protection.") }
 let environments = pages.flatMap { $0["environments"] as? [[String: Any]] ?? [] }
-if let existing = environments.first(where: { $0["name"] as? String == "release" }) {
+if let existing = existingReleaseEnvironment(in: environments) {
     guard protectedReleaseEnvironment(existing, ownerID: ownerID) else {
         fail("Existing release environment is not protected by owner approval. Configure its protection before uploading; existing rules were not replaced.")
     }

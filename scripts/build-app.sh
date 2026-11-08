@@ -31,7 +31,8 @@ if [[ "$mode" == release && -n $(git status --porcelain) ]]; then
 fi
 description=$(git describe --tags --match 'plus-v*' --long --always --dirty)
 python3 scripts/stamp-build.py "$output/VoiceInk.app" "$mode" "$source_commit" "$description"
-codesign --force --sign "$identity" --entitlements VoiceInk/VoiceInk.local.entitlements "$output/VoiceInk.app"
+codesign --force --options runtime --sign "$identity" --entitlements VoiceInk/VoiceInk.local.entitlements "$output/VoiceInk.app"
 codesign --verify --deep --strict "$output/VoiceInk.app"
+python3 scripts/verify-runtime.py "$output/VoiceInk.app"
 python3 scripts/plus-release.py check --app "$output/VoiceInk.app"
 printf 'Verified app: %s\n' "$output/VoiceInk.app"

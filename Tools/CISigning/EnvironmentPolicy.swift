@@ -10,3 +10,7 @@ func protectedReleaseEnvironment(_ environment: [String: Any], ownerID: Int) -> 
         return reviewer["id"] as? Int == ownerID
     }
 }
+
+func existingReleaseEnvironment(in environments: [[String: Any]]) -> [String: Any]? {
+    environments.first { ($0["name"] as? String)?.caseInsensitiveCompare("release") == .orderedSame }
+}
