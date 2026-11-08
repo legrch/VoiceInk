@@ -67,6 +67,8 @@ final class MediaController: ObservableObject {
         }
     }
 
+    var isIdleForAppSwitch: Bool { duckingService?.isIdleForAppSwitch ?? true }
+
     func refreshOutputVolume() {
         // Output identity and readiness may become readable after the route
         // callback, without another status transition.

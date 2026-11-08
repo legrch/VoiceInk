@@ -2269,3 +2269,17 @@ let movedEvidence = try JSONDecoder().decode(AudioDuckingRecoveryJournal.Failure
 check(movedEvidence.reason == "device_or_sleep_invalidated" && movedEvidence.record.cycleID == movedToken.cycleID,
       "route invalidation diagnostics survive moving the active record and replacing runtime")
 print("Route hold and both interrupted-restoration diagnostic integration checks passed")
+
+let exitOutput = makeOutput([0.6])
+var exitConfig = AudioDuckingConfiguration(mode: .duck)
+exitConfig.fadeDownSeconds = 0; exitConfig.fadeUpSeconds = 1; exitConfig.restoreDelaySeconds = 0
+let exitRuntime = AudioDuckingRuntime(output: exitOutput)
+check(!exitRuntime.blocksApplicationExit, "unused audio runtime permits an app switch")
+let exitToken = exitRuntime.begin(sessionID: UUID(), desired: exitConfig)!
+exitRuntime.activate(token: exitToken, now: 0)
+exitRuntime.end(token: exitToken, now: 1)
+check(exitRuntime.blocksApplicationExit, "restoration remains busy independently of its caller waiter")
+exitRuntime.tick(token: exitToken, now: 1)
+exitRuntime.tick(token: exitToken, now: 2.1)
+check(!exitRuntime.blocksApplicationExit, "completed output restoration permits an app switch")
+print("App-switch output restoration boundary checks passed")

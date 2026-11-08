@@ -15,6 +15,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 && !AudioDeviceManager.shared.isRecordingActive
                 && !AudioTranscriptionManager.shared.isProcessingQueue
                 && DevSwitchActivity.shared.isIdle
+                && MediaController.shared.isIdleForAppSwitch
         }
     }
 
