@@ -67,7 +67,7 @@ final class MediaController: ObservableObject {
         }
     }
 
-    var isIdleForAppSwitch: Bool { duckingService?.isIdleForAppSwitch ?? true }
+    var isIdleForAppSwitch: Bool { !muteOwnership.hasDevices && (duckingService?.isIdleForAppSwitch ?? true) }
 
     func refreshOutputVolume() {
         // Output identity and readiness may become readable after the route

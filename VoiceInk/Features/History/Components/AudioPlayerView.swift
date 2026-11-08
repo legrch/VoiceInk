@@ -610,8 +610,10 @@ struct AudioPlayerView: View {
 
         isReEnhancing = true
         operationFeedback = nil
+        let activityToken = DevSwitchActivity.shared.beginWork()
 
-        Task {
+        Task { @MainActor in
+            defer { DevSwitchActivity.shared.endWork(activityToken) }
             do {
                 transcription.aiEnhancementModelName =
                     enhancementConfiguration.modelName ?? enhancementConfiguration.provider?.defaultModel

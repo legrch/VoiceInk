@@ -10,5 +10,5 @@ fi
 command -v gh >/dev/null
 work=$(mktemp -d /private/tmp/voiceink-signing-setup.XXXXXX)
 trap 'rm -rf "$work"' EXIT
-swiftc Tools/CISigning/main.swift -o "$work/configure"
+swiftc Tools/CISigning/EnvironmentPolicy.swift Tools/CISigning/main.swift -o "$work/configure"
 "$work/configure" --upload

@@ -13,7 +13,10 @@ cp Tools/AutomationTests/gate.swift "$work/main.swift"
 swiftc VoiceInk/PersonalFeatures/Release/DevSwitchGate.swift "$work/main.swift" -o "$work/gate"
 "$work/gate"
 swiftc Tools/DevSwitch/main.swift -o "$work/notify"
-swiftc Tools/CISigning/main.swift -o "$work/signing"
+swiftc Tools/CISigning/EnvironmentPolicy.swift Tools/CISigning/main.swift -o "$work/signing"
 "$work/signing" --help
+cp Tools/AutomationTests/signing-policy.swift "$work/main.swift"
+swiftc Tools/CISigning/EnvironmentPolicy.swift "$work/main.swift" -o "$work/signing-policy"
+"$work/signing-policy"
 python3 Tools/AutomationTests/test-backup.py
 Tools/AutomationTests/test-manifest.sh

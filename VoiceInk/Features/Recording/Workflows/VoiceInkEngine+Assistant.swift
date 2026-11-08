@@ -11,6 +11,8 @@ extension VoiceInkEngine {
             return
         }
 
+        let activityToken = DevSwitchActivity.shared.beginWork()
+        defer { DevSwitchActivity.shared.endWork(activityToken) }
         let modelName = assistantSession.modelName
         let modeName = assistantSession.modeName
         let modeEmoji = assistantSession.modeEmoji

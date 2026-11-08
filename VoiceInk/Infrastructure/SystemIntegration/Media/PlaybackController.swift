@@ -14,6 +14,8 @@ class PlaybackController: ObservableObject {
         let stateRevision: UInt64
     }
 
+    var isIdleForAppSwitch: Bool { ownedPause == nil && stateRequests.isEmpty }
+
     private var ownedPause: OwnedPause?
     private var recordingSessionID = UUID()
     private var mediaStateRevision: UInt64 = 0

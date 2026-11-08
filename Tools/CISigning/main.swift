@@ -28,7 +28,25 @@ func run(_ arguments: [String], input: Data? = nil, capture: Bool = false) -> Da
     guard process.terminationStatus == 0 else { fail("GitHub rejected secret setup; inspect the named environment before retrying.") }
     return result
 }
-run(["api", "repos/legrch/VoiceInk/environments/release", "--method", "PUT"], capture: true)
+// Environment approval is enforced by GitHub before candidate-controlled code gets secrets.
+let ownerData = run(["api", "users/legrch"], capture: true)
+guard let owner = try? JSONSerialization.jsonObject(with: ownerData) as? [String: Any],
+      let ownerID = owner["id"] as? Int else { fail("Cannot establish the repository owner's reviewer identity.") }
+let pagesData = run(["api", "--paginate", "--slurp", "repos/legrch/VoiceInk/environments"], capture: true)
+guard let pages = try? JSONSerialization.jsonObject(with: pagesData) as? [[String: Any]] else { fail("Cannot inspect existing release protection.") }
+let environments = pages.flatMap { $0["environments"] as? [[String: Any]] ?? [] }
+if let existing = environments.first(where: { $0["name"] as? String == "release" }) {
+    guard protectedReleaseEnvironment(existing, ownerID: ownerID) else {
+        fail("Existing release environment is not protected by owner approval. Configure its protection before uploading; existing rules were not replaced.")
+    }
+} else {
+    let protection: [String: Any] = ["reviewers": [["type": "User", "id": ownerID]], "prevent_self_review": false]
+    guard let body = try? JSONSerialization.data(withJSONObject: protection) else { fail("Cannot encode release protection.") }
+    run(["api", "repos/legrch/VoiceInk/environments/release", "--method", "PUT", "--input", "-"], input: body, capture: true)
+}
+let protectionData = run(["api", "repos/legrch/VoiceInk/environments/release"], capture: true)
+guard let environment = try? JSONSerialization.jsonObject(with: protectionData) as? [String: Any],
+      protectedReleaseEnvironment(environment, ownerID: ownerID) else { fail("GitHub did not confirm release protection; no key was exported.") }
 let inventory = run(["secret", "list", "--repo", "legrch/VoiceInk", "--env", "release", "--json", "name"], capture: true)
 guard let entries = try? JSONSerialization.jsonObject(with: inventory) as? [[String: Any]],
       !entries.contains(where: { ["VOICEINK_P12_BASE64", "VOICEINK_P12_PASSWORD"].contains($0["name"] as? String ?? "") }) else {
