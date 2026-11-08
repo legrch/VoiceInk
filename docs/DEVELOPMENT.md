@@ -26,7 +26,7 @@ Use `task dev:build` to build without launching, or `scripts/dev.sh run` when Ta
 task check
 ```
 
-GitHub Actions runs the same relevant checks and an ad-hoc-signed full app build on a standard Apple Silicon `macos-15` runner, on PRs and `main`. It uses Xcode 26.3 and installs Metal Toolchain when needed. PR builds receive no release signing secrets or write token. A manual Checks run also uploads a Dev ZIP for one day; routine PR/main checks do not retain app artifacts. These artifacts are build evidence, not replacements for the certificate-qualified stable app. Release handoff artifacts also expire after one day.
+GitHub Actions runs the same relevant checks and an ad-hoc-signed full app build on a standard Apple Silicon `xcode-27` runner, on PRs and `main`. It uses Xcode 27.0 (Swift 6.3, required by the pinned MLX package) and installs Metal Toolchain when needed. PR builds receive no release signing secrets or write token. A manual Checks run also uploads a Dev ZIP for one day; routine PR/main checks do not retain app artifacts. These artifacts are build evidence, not replacements for the certificate-qualified stable app. Release handoff artifacts also expire after one day.
 
 ## One-time release signing setup
 

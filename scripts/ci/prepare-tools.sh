@@ -6,7 +6,7 @@ for package in cmake gh; do
   if ! command -v "$package" >/dev/null; then brew install "$package"; fi
 done
 command -v python3 >/dev/null
-sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
+sudo xcode-select -s /Applications/Xcode_27.app/Contents/Developer
 xcodebuild -version
 xcodebuild -downloadComponent MetalToolchain
 cmake --version

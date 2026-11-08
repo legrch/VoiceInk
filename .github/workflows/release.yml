@@ -11,7 +11,7 @@ concurrency:
 jobs:
   signed-build:
     if: github.repository == 'legrch/VoiceInk'
-    runs-on: macos-15
+    runs-on: xcode-27
     timeout-minutes: 90
     environment: release
     steps:
