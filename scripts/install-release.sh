@@ -31,8 +31,8 @@ install_release() {
     done
     # The underlying installer validates platform, destination, processes and bundle.
     # Updating these two pins is an explicit, reviewed release operation.
-    plus_installer_url=https://raw.githubusercontent.com/legrch/VoiceInk/9dfb2f96053530cb96db2c64ac86db3c5c6ea508/scripts/install.sh
-    plus_installer_sha256=b3bb5326d8d25a5d72d3758f4240d3358745d62880a4729edfab9afad868fafa
+    plus_installer_url=https://raw.githubusercontent.com/legrch/VoiceInk/17f17b02cd9d0da2a587389ae18bc5162264632a/scripts/install.sh
+    plus_installer_sha256=31c49530a810dfab16bffa7f6797da4e651513b48af8c2384c89915502247de5
     case "$selected" in
         personal-2.25.1)
             installer_url=https://raw.githubusercontent.com/legrch/VoiceInk/7852619a59ba84f34e386019c55eaf8fa1ba5eeb/scripts/install.sh
