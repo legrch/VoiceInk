@@ -5,6 +5,9 @@ for script in scripts/build-app.sh scripts/dev.sh scripts/configure-ci-signing.s
 PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/dev-backup.py scripts/dev-session.py scripts/ci/validate-tag.py scripts/ci/publish-release.py
 python3 Tools/AutomationTests/test-stamp.py
 python3 Tools/AutomationTests/test-build-signing.py
+python3 Tools/AutomationTests/test-release-identity.py
+python3 Tools/AutomationTests/test-server-release.py
+python3 Tools/AutomationTests/test-release-admission.py
 python3 Tools/AutomationTests/test-publish.py
 python3 Tools/AutomationTests/test-session.py
 Tools/AutomationTests/test-resolver.sh

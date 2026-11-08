@@ -47,26 +47,50 @@ This selects only the existing VoiceInk certificate by its fixed SHA-256, export
 
 The final app is re-signed with hardened runtime explicitly enabled, and the final CodeDirectory flags are checked before packaging. Existing release environments are matched case-insensitively and their protection rules are preserved.
 
-Package resolution runs before key import, stays pinned to Package.resolved and retries only a known transient connection or HTTP 502/503/504 error (at most three attempts). Permission/auth/checksum failures are not retried. A runner imports the identity into a temporary keychain, verifies the fixed certificate fingerprint and removes the keychain afterward. Only release builds receive it. A manual **Release → Run workflow** on `main` is a signed packaging/install/rollback dry run and never publishes, uploads a release artifact or changes an installed app.
+Package resolution runs before key import, stays pinned to Package.resolved and retries only a known transient connection or HTTP 502/503/504 error (at most three attempts). Permission/auth/checksum failures are not retried. A runner imports the identity into a temporary keychain, verifies the fixed certificate fingerprint and removes the keychain afterward. Only release builds receive it. A manual **Release → Run workflow** defaults to **dry-run**: signed packaging/install/rollback without publication, release-asset upload or changes to an installed app. Explicit **publish** mode on `main` follows the release path below.
 
-## Publish the next version
+## Publish on explicit request
 
-1. Prepare the next `release/plus.json`: retain the exact upstream version/commit, increase fork revision and allocate a build strictly greater than every published build. Generate Info/plist settings with `python3 scripts/plus-release.py sync-info`.
-2. Test the Dev candidate, run checks and the required source review, and merge through a reviewed PR. Wait for the `macos-build` check on that exact `main` commit.
-3. Run:
+Ordinary commits and PR merges to `main` do not publish anything. After integrating a tested/reviewed change, request a release with:
 
-   ```sh
-   task release
-   ```
+```sh
+task release
+```
 
-The command requires a clean checkout equal to `origin/main`, verifies the manifest and existing releases, refuses an existing local/remote tag, creates an annotated tag and pushes only that tag. No force push is used.
+This command only reads the fixed fork's GitHub `main` identity and dispatches **Release** in `publish` mode, with that exact expected SHA. It prints the original Actions run URL and exits. It does not edit files, create local commits/tags, push to main, or wait on your Mac. You can instead select **Actions > Release > Run workflow**, branch **main**, mode **publish**. A successful dispatch means requested, not published; follow the linked run.
 
-The tag triggers **Release**: validate main ancestry/tag/build ordering, run tests, build with the existing certificate, package ZIP plus `release.json` and checksums, verify installation/rollback in disposable destinations, then publish the new GitHub release. Publication rechecks the tag's commit and build ordering under a serialized publish job. It never replaces old release assets. Missing signing secrets or failed checks stop publication.
+GitHub checks that the selected source has a successful completed main **Checks** run, including its macOS job. It waits up to one hour for a still-running check, but fails on a failed/canceled check, API error or source mismatch. It then computes the next `rN` on that upstream version and a globally increasing numeric build, considering published and previously reserved identities. A new upstream version starts at `r1`; its numeric build does not reset.
 
-The installation command stays unchanged. Its code is pinned by commit/hash; future releases supply strictly validated JSON data, not executable installer code from mutable release metadata. The installer constructs its own repository URLs and verifies archive hash, app signature, fixed certificate, bundle/version/build/tag, updater isolation, backups and replacement rollback. The pre-CI r3 and historical exact legacy release remain installable without a new manifest. No automatic in-app updater is enabled.
+The read-only plan job passes validated metadata to a narrow tag-writing job. The latter creates an annotated immutable tag with version/build/source and originating run identity. The current workflow continues directly to the existing protected signing/build/package/install/rollback/publish jobs. It does not rely on a second workflow starting from its own token's tag push. No new PAT, GitHub App credential, production agent or local daemon is needed.
 
-Standard GitHub-hosted runners are free for public repositories; job duration, concurrency and storage limits still apply. Use short-lived CI artifacts and public release assets for durable downloads. Do not select paid larger runners.
+### Metadata and reproducibility
+
+`release/plus.json` and generated source plist/project fields remain **upstream provenance and local-build defaults**. They do not need a new commit for each release. Change upstream provenance through a reviewed source PR when updating the upstream base.
+
+Actions supplies `VOICEINK_RELEASE_METADATA` as validated JSON from the same run's plan and verifies it against the reserved tag and exact checkout. Only the copied app's main plist is stamped before final signing. The tracked manifest, source plist/project, helpers, entitlements, bundle ID and updater policy remain unchanged. Packaging generates the public `release.json`, archive hash and source identity from this effective metadata. The annotated tag preserves the metadata needed to reproduce that release from its exact source; archived pre-automation tags retain their original procedure.
+
+### Approval, queue and recovery
+
+The `release` environment retains its reviewer rule for `legrch`. GitHub repository administrators also retain the existing administrator-bypass capability; this change does not modify environment protections. A pending or rejected approval does not mean the release succeeded.
+
+Publish workflows share one non-cancelling concurrency group. GitHub keeps one active and one pending request; a newer publish request may replace the pending one. Dry runs use a different per-run group and cannot displace publishing. This is a single-owner latest-pending-request policy, not a FIFO queue. Inspect the original run URL. A first attempt canceled before allocation has no new tag; a canceled queued **rerun** can still have a reservation from its earlier attempt and must reconcile it normally.
+
+Rerun the original workflow to reuse its existing source/tag/build after a confirmed transient failure. No mutation is automatically retried after an uncertain response. If signing or release-only checks expose a defect requiring a different source, merge the correction through a reviewed PR and explicitly request another release. Once the original run is confirmed terminal failed/canceled and no partial release exists, the new reservation records its superseded predecessor and permanently consumes both its revision and build numbers. The old tag/evidence stays; late attempts to publish it are refused. API errors, unresolved origins, conflicting tags and draft/partial releases stop for inspection rather than moving tags or replacing assets.
+
+Immediately before publication, the workflow revalidates exact tag-object/source/metadata, supersession and build ordering. Old assets are never clobbered. Do not delete or move a reserved tag to make a check pass.
+
+### Safe dry run
+
+```sh
+task release:dry-run
+```
+
+Or manually run **Release**, mode **dry-run** (the default). It computes candidate metadata, builds/signs/packages and verifies disposable installation/rollback without reserving a tag, publishing or uploading release assets. A branch may be selected for a trusted candidate dry run; it still goes through the signing environment. A publishing request must select `main`. Source review, fake tests, PR CI, a protected signed dry run and actual publication remain separate evidence.
+
+The user installation command stays unchanged. Its code is pinned by commit/hash; releases supply validated JSON data, not executable installer code from mutable metadata. No automatic in-app updater is enabled.
+
+Server release planning starts from this fork's manifest-bearing r4 baseline. It does not bootstrap a repository whose latest release is the historical manifest-free r3; the installer's separate r3 compatibility remains unchanged.
 
 ## Qualification status
 
-Source checks, local signed builds, PR builds, signed GitHub dry runs, publication and owner-observed app switching are separate checks. A green unsigned CI job does not qualify signing or a live microphone/music trial. Signing setup requires explicit owner authorization; the workflow is not end-to-end qualified until its signed dry run succeeds.
+Source checks, local signed builds, PR builds, signed GitHub dry runs, publication and owner-observed app switching are separate checks. A green unsigned CI job does not qualify signing or a live microphone/music trial. Signing setup requires explicit owner authorization; new workflow changes are not end-to-end qualified until their signed dry run succeeds. Historical successful runs do not qualify later candidates.

@@ -15,5 +15,8 @@ tasks:
       - Tools/AutomationTests/run.sh
       - Tools/ReleaseInstallTests/test-bootstrap.sh
   release:
-    desc: Push the manifest tag from verified main and let GitHub Actions build/publish
+    desc: Request a server-side release of GitHub main without editing local files
     cmds: [python3 scripts/release-tag.py]
+  release:dry-run:
+    desc: Request a signed packaging dry run without a tag or publication
+    cmds: [python3 scripts/release-tag.py --dry-run]
